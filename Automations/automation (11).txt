@@ -1,0 +1,67 @@
+alias: (11) R5 - Snapshot Plug Baseline When Confidently Plugged
+description: >-
+  Stores mileage+SoC baseline only when plug looks genuinely connected (not
+  stuck/derived), and charging evidence exists.
+triggers:
+  - entity_id:
+      - sensor.r5_charger_status_api
+      - sensor.r5_charging_remaining_time_api
+      - <ev-charger-power>
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >-
+      {% set bd = state_attr('sensor.r5_battery_raw', 'data') %} {% set bd = bd
+      if bd is mapping else {} %} {% set ok = bd.get('ok', false) %} {% set err
+      = (bd.get('error') | string | lower | trim) %} {{ ok and err not in
+      ['cli_prompted', 'unauthorized', 'timeout', 'parse_error'] }}
+  - condition: template
+    value_template: >-
+      {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower |
+      trim %} {% set connected = plug_state.startswith('connected') %} {% set
+      stuck = '(d)' in plug_state %}
+
+      {% set status = states('sensor.r5_charger_status_api') | string | trim %}
+      {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+      {% set hv = states('<ev-charger-power>') | float(0) %}
+
+      {% set stale = is_state('binary_sensor.r5_renault_raw_stale','on') %}
+
+      {% set ts = states('input_datetime.r5_plug_baseline_ts') %} {% set ts0 =
+      as_timestamp(ts, 0) %} {% set age = (as_timestamp(now()) - ts0) |
+      int(999999) if ts0 > 0 else 999999 %} {% set recently_set = age < 1800 %}
+
+      {{
+        (not stale)
+        and connected
+        and (not stuck)
+        and (status == 'In Progress' or rem > 10 or hv > 0.2)
+        and (not recently_set)
+      }}
+actions:
+  - variables:
+      bd: "{{ state_attr('sensor.r5_battery_raw', 'data') }}"
+      bd2: "{{ bd if bd is mapping else {} }}"
+      ba: >-
+        {{ bd2.get('attributes', {}) if bd2.get('attributes') is mapping else {}
+        }}
+      soc: "{{ ba.get('batteryLevel') | int(0) }}"
+      cd: "{{ state_attr('sensor.r5_cockpit_raw', 'data') }}"
+      cd2: "{{ cd if cd is mapping else {} }}"
+      ca: >-
+        {{ cd2.get('attributes', {}) if cd2.get('attributes') is mapping else {}
+        }}
+      km: "{{ ca.get('totalMileage') | float(0) }}"
+  - action: input_number.set_value
+    data:
+      entity_id: input_number.r5_plug_baseline_soc
+      value: "{{ soc }}"
+  - action: input_number.set_value
+    data:
+      entity_id: input_number.r5_plug_baseline_mileage_km
+      value: "{{ km | round(0) }}"
+  - action: input_datetime.set_datetime
+    data:
+      entity_id: input_datetime.r5_plug_baseline_ts
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+mode: single

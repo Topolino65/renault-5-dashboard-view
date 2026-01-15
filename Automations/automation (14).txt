@@ -1,0 +1,60 @@
+alias: (14) R5 Public Charging - Backfill Start Power Estimate
+description: >-
+  If a session is active and this is a public charge (no home charger samples),
+  backfill start power helper from estimated kW once it becomes available.
+triggers:
+  - trigger: time_pattern
+    minutes: /1
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "on"
+  - condition: state
+    entity_id: input_boolean.r5_test_mode
+    state: "off"
+  - condition: template
+    value_template: "{{ states('input_number.r5_hv_avg_count') | int(0) == 0 }}"
+  - condition: template
+    value_template: "{{ states('input_number.r5_last_charge_start_power_kw') | float(0) <= 0 }}"
+actions:
+  - variables:
+      start_kwh_s: "{{ states('sensor.r5_last_charge_start_energy_tmp') }}"
+      now_kwh_s: "{{ states('sensor.r5_available_energy_52_kwh_api') }}"
+      start_kwh: >-
+        {{ start_kwh_s | float(-1) if start_kwh_s not in
+        ['unknown','unavailable','none',''] else -1 }}
+      now_kwh: >-
+        {{ now_kwh_s | float(-1) if now_kwh_s not in
+        ['unknown','unavailable','none',''] else -1 }}
+      start_dt_s: "{{ states('input_datetime.r5_last_charge_start') }}"
+      start_ts: "{{ as_timestamp(start_dt_s, 0) }}"
+      mins: >-
+        {{ ((as_timestamp(now()) - start_ts) / 60) | float(0) if start_ts > 0
+        else 0 }}
+      est_kw: >-
+        {% if start_kwh >= 0 and now_kwh >= 0 and mins > 1 and now_kwh >
+        start_kwh %}
+          {% set dE = now_kwh - start_kwh %}
+          {{ (dE / (mins/60)) | float(0) }}
+        {% else %}
+          0
+        {% endif %}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ est_kw > 0.2 }}"
+        sequence:
+          - action: input_number.set_value
+            target:
+              entity_id: input_number.r5_last_charge_start_power_kw
+            data:
+              value: "{{ est_kw | round(1) }}"
+          - action: persistent_notification.create
+            data:
+              title: R5 Public Charge
+              message: >-
+                Backfilled start power from estimate: {{ est_kw | round(1) }} kW
+                (mins={{ mins | round(0) }}, ΔE={{ (now_kwh - start_kwh) |
+                round(2) }} kWh)
+              notification_id: r5_public_power_backfill
+mode: single

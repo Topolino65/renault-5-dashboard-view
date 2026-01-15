@@ -1,0 +1,28 @@
+alias: (2) R5 Charge Session - Sample Power After Start (Home Charger)
+description: >-
+  Take a "settled" home charger power sample shortly after session start. Does NOT
+  overwrite the initial start power if already captured.
+triggers:
+  - entity_id: input_boolean.r5_charge_session_active
+    to: "on"
+    trigger: state
+conditions: []
+actions:
+  - delay: "00:00:10"
+  - variables:
+      hv_state: "{{ states('<ev-charger-power>') }}"
+      hv_kw: >-
+        {{ (hv_state | float(0)) if hv_state not in
+        ['unknown','unavailable','none',''] else 0 }}
+      start_p: "{{ states('input_number.r5_last_charge_start_power_kw') | float(0) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ hv_kw > 0.2 and start_p <= 0 }}"
+        sequence:
+          - target:
+              entity_id: input_number.r5_last_charge_start_power_kw
+            data:
+              value: "{{ hv_kw | round(1) }}"
+            action: input_number.set_value
+mode: single

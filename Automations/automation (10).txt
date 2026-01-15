@@ -1,0 +1,44 @@
+alias: (10) R5 - RAW Sensors Stale (6 Hours)
+description: >-
+  Alerts if Renault RAW sensors haven't updated for 6+ hours (after recovery
+  attempt).
+triggers:
+  - trigger: state
+    entity_id: binary_sensor.r5_renault_raw_stale
+    to: "on"
+    for: "00:25:00"
+conditions:
+  - condition: template
+    value_template: >-
+      {% set last = states('input_datetime.r5_last_renault_reauth') %} {% set
+      last_ts = as_timestamp(last, default=0) %} {{ last_ts == 0 or
+      (now().timestamp() - last_ts) > 600 }}
+actions:
+  - variables:
+      stale_list: >-
+        {{ state_attr('binary_sensor.r5_renault_raw_stale', 'offenders') or []
+        }}
+      auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+      cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+  - action: persistent_notification.create
+    data:
+      title: Renault API – RAW sensors stale
+      message: |-
+        One or more Renault RAW sensors have not updated for 6+ hours.
+
+        Stale offenders: {{ stale_list }}
+
+        Auth failure: {{ 'YES' if auth_failure else 'no' }}
+        CLI prompted: {{ 'YES' if cli_prompted else 'no' }}
+
+        Logs:
+        - /config/renault/renault_api_login.log
+        - /config/renault_cli.log
+      notification_id: r5_raw_stale
+  - action: notify.mobile_app_<your-mobile-id>
+    data:
+      title: Renault API – RAW sensors stale
+      message: >-
+        RAW sensors stale 6h+: {{ stale_list }}. AuthFail={{ 'YES' if
+        auth_failure else 'no' }}, CLI={{ 'YES' if cli_prompted else 'no' }}.
+mode: single

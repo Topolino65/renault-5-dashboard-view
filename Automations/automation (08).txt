@@ -1,0 +1,158 @@
+alias: (8) R5 Renault API - Auto Reauth When Auth Fails
+description: >-
+  Auto reauth + refresh when auth failures are detected, or RAW sensors go
+  stale/unavailable. Handles "manual run" (no trigger context) and separates
+  auth failure from CLI-prompted / cache mode.
+triggers:
+  - id: auth_failure
+    entity_id: binary_sensor.r5_renault_api_auth_failure
+    to: "on"
+    trigger: state
+  - id: cli_prompted
+    entity_id: binary_sensor.r5_renault_api_cli_prompted
+    to: "on"
+    trigger: state
+  - id: raw_stale_6h
+    entity_id: binary_sensor.r5_renault_raw_stale
+    to: "on"
+    trigger: state
+  - id: raw_unavailable_10m
+    entity_id:
+      - sensor.r5_soc_levels_raw
+      - sensor.r5_ev_settings_raw
+      - sensor.r5_status_raw
+      - sensor.r5_charges_raw
+      - sensor.r5_battery_raw
+      - sensor.r5_hvac_raw
+      - sensor.r5_cockpit_raw
+      - sensor.r5_location_raw
+    to:
+      - unavailable
+      - unknown
+    for: "00:10:00"
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >-
+      {% set last = states('input_datetime.r5_last_renault_reauth') %} {% set
+      last_ts = as_timestamp(last, default=0) %} {% set age = (now().timestamp()
+      - last_ts) if last_ts > 0 else 999999 %} {% set cli_now =
+      is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %} {# Cooldown
+      policy:
+         - if CLI prompted is ON, allow retry every 15 minutes (900s)
+         - otherwise, keep the original 1 hour cooldown (3600s)
+      #} {{ last_ts == 0
+         or (cli_now and age > 900)
+         or ((not cli_now) and age > 3600) }}
+actions:
+  - variables:
+      trig_id: >-
+        {{ trigger.id if trigger is defined and trigger.id is defined else
+        'manual' }}
+      trig_entity: >-
+        {{ trigger.entity_id if trigger is defined and trigger.entity_id is
+        defined else 'n/a' }}
+      trigger_name: "{{ trig_id ~ ' / ' ~ trig_entity }}"
+      auth_fail_now: "{{ is_state('binary_sensor.r5_renault_api_auth_failure','on') }}"
+      cli_prompt_now: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted','on') }}"
+      do_login: |-
+        {{ auth_fail_now
+           or (trig_id in ['auth_failure','cli_prompted'] and (auth_fail_now or cli_prompt_now))
+           or (trig_id == 'manual' and cli_prompt_now) }}
+      do_ping: >-
+        {{ trig_id in
+        ['auth_failure','cli_prompted','raw_stale_6h','raw_unavailable_10m','manual']
+        }}
+      offenders_cli: >-
+        {{ state_attr('binary_sensor.r5_renault_api_cli_prompted','offenders')
+        }}
+      offenders_auth: >-
+        {{ state_attr('binary_sensor.r5_renault_api_auth_failure','offenders')
+        }}
+      offenders_stale: "{{ state_attr('binary_sensor.r5_renault_raw_stale','offenders') }}"
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.r5_last_renault_reauth
+    data:
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+  - action: persistent_notification.create
+    data:
+      title: R5 Renault API
+      message: >-
+        Renault API issue detected ({{ trigger_name }}).
+
+        Current flags: - Auth failure: {{ 'YES' if auth_fail_now else 'no' }} -
+        CLI prompted: {{ 'YES' if cli_prompt_now else 'no' }}
+
+        Action plan: - Login: {{ 'YES' if do_login else 'no' }} - Ping status +
+        update RAW sensors: {{ 'YES' if do_ping else 'no' }}
+      notification_id: r5_api_auth
+  - delay: "00:00:05"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ do_login }}"
+        sequence:
+          - action: shell_command.r5_api_login
+          - delay: "00:00:10"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ do_ping }}"
+        sequence:
+          - action: shell_command.r5_status_refresh
+            data:
+              account_id: <your-account-number>
+              vin: <your-vin-number>
+          - delay: "00:00:05"
+  - action: homeassistant.update_entity
+    target:
+      entity_id:
+        - sensor.r5_battery_raw
+        - sensor.r5_status_raw
+        - sensor.r5_charges_raw
+        - sensor.r5_soc_levels_raw
+        - sensor.r5_hvac_raw
+        - sensor.r5_ev_settings_raw
+        - sensor.r5_cockpit_raw
+        - sensor.r5_location_raw
+  - delay: "00:00:15"
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: binary_sensor.r5_renault_api_auth_failure
+            state: "off"
+          - condition: state
+            entity_id: binary_sensor.r5_renault_api_cli_prompted
+            state: "off"
+        sequence:
+          - action: persistent_notification.create
+            data:
+              title: R5 Renault API
+              message: >-
+                Recovery run completed and both flags are now OFF.
+
+                Trigger: {{ trigger_name }} Login attempted: {{ 'YES' if
+                do_login else 'no' }}
+              notification_id: r5_api_auth
+    default:
+      - action: persistent_notification.create
+        data:
+          title: R5 Renault API
+          message: >-
+            Recovery ran but a flag is still ON.
+
+            Trigger: {{ trigger_name }} Login attempted: {{ 'YES' if do_login
+            else 'no' }}
+
+            Current flags: - Auth failure: {{
+            states('binary_sensor.r5_renault_api_auth_failure') }} - CLI
+            prompted: {{ states('binary_sensor.r5_renault_api_cli_prompted') }}
+
+            Offenders (CLI): {{ offenders_cli }} Offenders (Auth): {{
+            offenders_auth }} Offenders (Stale): {{ offenders_stale }}
+
+            Check: - /config/renault/renault_api_login.log -
+            /config/renault_cli.log
+          notification_id: r5_api_auth
+mode: single

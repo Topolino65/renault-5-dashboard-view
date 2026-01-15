@@ -1,0 +1,61 @@
+alias: (0) R5 - RAW Sensors Unavailable
+description: >-
+  Alerts if any Renault RAW sensor is unavailable/unknown for 30+ minutes (after
+  recovery attempt).
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.r5_soc_levels_raw
+      - sensor.r5_ev_settings_raw
+      - sensor.r5_status_raw
+      - sensor.r5_charges_raw
+      - sensor.r5_battery_raw
+      - sensor.r5_hvac_raw
+      - sensor.r5_cockpit_raw
+      - sensor.r5_location_raw
+    to:
+      - unavailable
+      - unknown
+    for: "00:30:00"
+conditions:
+  - condition: template
+    value_template: >-
+      {% set last = states('input_datetime.r5_last_renault_reauth') %} {% set
+      last_ts = as_timestamp(last, default=0) %} {{ last_ts == 0 or
+      (now().timestamp() - last_ts) > 600 }}
+actions:
+  - variables:
+      to_state: "{{ trigger.to_state.state if trigger.to_state else 'unknown' }}"
+      for_time: "00:30:00"
+      auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+      cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+      stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+      stale_list: >-
+        {{ state_attr('binary_sensor.r5_renault_raw_stale', 'offenders') or []
+        }}
+  - action: persistent_notification.create
+    data:
+      title: Renault API – RAW sensor unavailable
+      message: >-
+        Renault RAW sensor {{ trigger.entity_id }} has been {{ to_state }} for
+        at least {{ for_time }}.
+
+        Auth failure: {{ 'YES' if auth_failure else 'no' }} CLI prompted: {{
+        'YES' if cli_prompted else 'no' }} RAW stale (6h+): {{ 'YES' if stale
+        else 'no' }}
+
+        Stale offenders (if any): {{ stale_list }}
+
+        Suggested steps: 1) Let Auto Reauth (8) run / or trigger a RAW refresh.
+        2) If it persists, restart Home Assistant Core.
+
+        Logs: - /config/renault/renault_api_login.log - /config/renault_cli.log
+      notification_id: r5_raw_unavailable
+  - action: notify.mobile_app_<your-mobile-id>
+    data:
+      title: Renault API – RAW sensor unavailable
+      message: >-
+        {{ trigger.entity_id }} = {{ to_state }} for 30m. AuthFail={{ 'YES' if
+        auth_failure else 'no' }}, CLI={{ 'YES' if cli_prompted else 'no' }},
+        Stale6h={{ 'YES' if stale else 'no' }}.
+mode: single

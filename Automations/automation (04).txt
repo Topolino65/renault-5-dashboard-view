@@ -1,0 +1,86 @@
+alias: (4) R5 Charge Session - End Of Charge Instant (RAW/API)
+description: End a charge session quickly using home charger OR API charging status.
+triggers:
+  - trigger: numeric_state
+    entity_id: <ev-charger-power>
+    below: 0.2
+    for: "00:03:00"
+  - trigger: state
+    entity_id: <ev-charger-power>
+    to:
+      - unavailable
+      - unknown
+    for: "00:03:00"
+  - trigger: state
+    entity_id: sensor.r5_charger_status_api
+    to:
+      - Not Charging
+      - Charge Ended
+      - Charge Error
+      - Unavailable
+  - trigger: template
+    value_template: >-
+      {% set plug = (states('sensor.r5_charger_plug_status_api') | lower | trim)
+      %} {% set st = (states('sensor.r5_charger_status_api') | string | trim) %}
+      {{ plug.startswith('disconnected') and st == 'Not Charging' }}
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "on"
+  - condition: state
+    entity_id: input_boolean.r5_test_mode
+    state: "off"
+  - condition: state
+    entity_id: binary_sensor.r5_renault_raw_stale
+    state: "off"
+actions:
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ trigger.entity_id == '<ev-charger-power>'
+                 and trigger.to_state is not none
+                 and trigger.to_state.state in ['unknown','unavailable'] }}
+          - condition: template
+            value_template: >-
+              {% set st = (states('sensor.r5_charger_status_api') | string |
+              trim) %} {% set rem =
+              states('sensor.r5_charging_remaining_time_api') | int(0) %} {% set
+              plug = (states('sensor.r5_charger_plug_status_api') | lower |
+              trim) %} {% set connected = plug.startswith('connected') %} {{ (st
+              != 'In Progress') and (rem <= 0) and (not connected) }}
+        sequence:
+          - variables:
+              last_seen: "{{ states('input_datetime.r5_last_nonzero_power_seen') }}"
+              end_dt: |-
+                {% if last_seen not in ['unknown','unavailable','none',''] %}
+                  {{ last_seen }}
+                {% else %}
+                  {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+                {% endif %}
+          - action: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.r5_last_charge_end
+            data:
+              datetime: "{{ end_dt }}"
+          - action: script.turn_on
+            target:
+              entity_id: script.r5_capture_end_force
+          - stop: Ended due to home charger unavailable + Renault not charging
+  - variables:
+      last_seen: "{{ states('input_datetime.r5_last_nonzero_power_seen') }}"
+      end_dt: |-
+        {% if last_seen not in ['unknown','unavailable','none',''] %}
+          {{ last_seen }}
+        {% else %}
+          {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+        {% endif %}
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.r5_last_charge_end
+    data:
+      datetime: "{{ end_dt }}"
+  - action: script.turn_on
+    target:
+      entity_id: script.r5_capture_end_force
+mode: single

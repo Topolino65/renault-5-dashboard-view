@@ -1,0 +1,79 @@
+alias: (3) R5 Charge Session - Update Duration/Avg Power Whilst Charging (RAW/API)
+description: >-
+  Accumulate home charger kW samples + update duration while session active.
+  Force-end if HV=0 for 3m (HV sessions only).
+triggers:
+  - minutes: /1
+    trigger: time_pattern
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "on"
+actions:
+  - variables:
+      hv_state: "{{ states('<ev-charger-power>') }}"
+      hv_available: "{{ hv_state not in ['unknown','unavailable','none',''] }}"
+      hv_kw: "{{ (hv_state | float(0)) if hv_available else -1 }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ hv_available and hv_kw > 0.2 }}"
+        sequence:
+          - target:
+              entity_id: input_datetime.r5_last_nonzero_power_seen
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+            action: input_datetime.set_datetime
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ hv_available and hv_kw > 0.2 }}"
+        sequence:
+          - variables:
+              acc: "{{ states('input_number.r5_hv_avg_accum_kw') | float(0) }}"
+              cnt: "{{ states('input_number.r5_hv_avg_count') | int(0) }}"
+          - target:
+              entity_id: input_number.r5_hv_avg_accum_kw
+            data:
+              value: "{{ (acc + hv_kw) | round(3) }}"
+            action: input_number.set_value
+          - target:
+              entity_id: input_number.r5_hv_avg_count
+            data:
+              value: "{{ cnt + 1 }}"
+            action: input_number.set_value
+  - variables:
+      start_s: "{{ states('input_datetime.r5_last_charge_start') }}"
+      start_ts: "{{ as_timestamp(start_s, 0) }}"
+      duration_min: |-
+        {% if start_ts > 0 %}
+          {{ ((as_timestamp(now()) - start_ts) / 60) | round(0) }}
+        {% else %}
+          0
+        {% endif %}
+      duration_min_clamped: >-
+        {% set v = duration_min | float(0) %} {% if v < 0 %} 0 {% elif v > 1440
+        %} 1440 {% else %} {{ v | round(0) }} {% endif %}
+  - target:
+      entity_id: input_number.r5_last_charge_duration_min
+    data:
+      value: "{{ duration_min_clamped }}"
+    action: input_number.set_value
+  - variables:
+      last_nz: "{{ states('input_datetime.r5_last_nonzero_power_seen') }}"
+      last_nz_ts: "{{ as_timestamp(last_nz, 0) }}"
+      nz_age: >-
+        {{ (as_timestamp(now()) - last_nz_ts) | int(0) if last_nz_ts > 0 else
+        999999 }}
+      hv_session: "{{ hv_available and (last_nz_ts > 0) }}"
+      hv_zero_now: "{{ hv_available and (hv_kw >= 0) and (hv_kw < 0.2) }}"
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ hv_session and hv_zero_now and nz_age >= 180 }}"
+        sequence:
+          - target:
+              entity_id: script.r5_capture_end_force
+            action: script.turn_on
+          - stop: Stopped by Home Charger - zero for 3m (HV session only)
+mode: restart

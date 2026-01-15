@@ -1,0 +1,21 @@
+alias: (7) R5 Cabin Temp API - Refresh While HVAC ON
+description: ""
+triggers:
+  - entity_id: sensor.r5_hvac_status_api
+    to: "on"
+    trigger: state
+actions:
+  - target:
+      entity_id: sensor.r5_cabin_temperature_api
+    action: homeassistant.update_entity
+  - repeat:
+      while:
+        - condition: state
+          entity_id: sensor.r5_hvac_status_api
+          state: "on"
+      sequence:
+        - delay: "00:02:00"
+        - target:
+            entity_id: sensor.r5_cabin_temperature_api
+          action: homeassistant.update_entity
+mode: restart

@@ -1,0 +1,65 @@
+alias: (6) R5 HVAC - Refresh RAW After State Change (Rate Limit Friendly)
+description: On HVAC on/off change, refresh hvac_raw only if needed (max 2 API calls)
+triggers:
+  - entity_id: sensor.r5_hvac_status_api
+    from: "off"
+    to: "on"
+    trigger: state
+  - entity_id: sensor.r5_hvac_status_api
+    from: "on"
+    to: "off"
+    trigger: state
+actions:
+  - variables:
+      target_state: "{{ trigger.to_state.state | lower }}"
+      raw_state: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %} {% set d = d if d
+        is mapping else {} %} {% set a = d.get('attributes') %} {% set a = a if
+        a is mapping else {} %} {{ a.get('hvacStatus','unknown') | string |
+        lower }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ raw_state == target_state }}"
+        sequence:
+          - stop: RAW already matches; no refresh needed
+  - target:
+      entity_id: sensor.r5_hvac_raw
+    action: homeassistant.update_entity
+  - delay: "00:00:08"
+  - variables:
+      raw_state_1: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %} {% set d = d if d
+        is mapping else {} %} {% set a = d.get('attributes') %} {% set a = a if
+        a is mapping else {} %} {{ a.get('hvacStatus','unknown') | string |
+        lower }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ raw_state_1 == target_state }}"
+        sequence:
+          - stop: Matched after 1 refresh
+  - delay: "00:01:00"
+  - target:
+      entity_id: sensor.r5_hvac_raw
+    action: homeassistant.update_entity
+  - delay: "00:00:08"
+  - variables:
+      raw_state_2: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %} {% set d = d if d
+        is mapping else {} %} {% set a = d.get('attributes') %} {% set a = a if
+        a is mapping else {} %} {{ a.get('hvacStatus','unknown') | string |
+        lower }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ raw_state_2 != target_state }}"
+        sequence:
+          - data:
+              title: R5 HVAC watchdog
+              message: >-
+                Still mismatched after 2 refreshes. Target={{ target_state }},
+                RAW={{ raw_state_2 }}.
+              notification_id: r5_hvac_watchdog
+            action: persistent_notification.create
+mode: restart

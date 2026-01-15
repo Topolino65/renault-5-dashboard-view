@@ -1,0 +1,137 @@
+alias: (15) R5 Charge Session - Isolated 5 Minute Simulation
+description: >
+  Fully isolated 5-min test session using dedicated test helpers only. Real
+  last-charge helpers/sensors remain untouched.
+triggers:
+  - entity_id: input_button.r5_test_charge_run
+    trigger: state
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "off"
+  - condition: template
+    value_template: >
+      {% set st = states('sensor.r5_charger_status_api') | string | trim %} {{
+      st not in ['In Progress'] }}
+  - condition: template
+    value_template: "{{ states('sensor.r5_charging_remaining_time_api') | int(0) <= 0 }}"
+  - condition: template
+    value_template: "{{ states('<ev-charger-power>') | float(0) <= 0.2 }}"
+actions:
+  - variables:
+      start_dt: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      test_start_soc: 75
+      test_end_soc: 80
+      test_start_energy: 39
+      test_end_energy: 41.6
+      test_start_power: 7.2
+      test_avg_power: 3.6
+      test_energy_stored: 2.6
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.r5_test_mode
+  - action: input_boolean.turn_on
+    target:
+      entity_id: input_boolean.r5_charge_session_active
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.test_last_charge_end_status
+    data:
+      value: Testing...
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.test_last_charge_type
+    data:
+      value: Testing...
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.test_last_charge_start
+    data:
+      datetime: "{{ start_dt }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_last_charge_start_soc
+    data:
+      value: "{{ test_start_soc }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_charge_start_energy_kwh
+    data:
+      value: "{{ test_start_energy }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_last_charge_start_power_kw
+    data:
+      value: "{{ test_start_power }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_last_charge_average_power_kw
+    data:
+      value: "{{ test_avg_power }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_charge_energy_stored_kwh
+    data:
+      value: "{{ test_energy_stored }}"
+  - action: persistent_notification.create
+    data:
+      title: "R5 TEST: Started (Panel)"
+      message: >
+        Start {{ start_dt }} | SoC {{ test_start_soc }}→{{ test_end_soc }} | E
+        {{ test_start_energy }}→{{ test_end_energy }} kWh | Pstart {{
+        test_start_power }} kW | Avg {{ test_avg_power }} kW
+      notification_id: r5_charge_test_panel
+  - delay: "00:05:00"
+  - variables:
+      end_dt: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+      duration_min: 5
+      energy_gain: "{{ (test_end_energy - test_start_energy) | round(1) }}"
+      avg_kw_calc: >-
+        {{ ((test_end_energy - test_start_energy) / (duration_min / 60)) |
+        round(1) }}
+      charge_type_text: >-
+        Test: {{ energy_gain }} kWh / {{ duration_min }} min ({{ avg_kw_calc }}
+        kW)
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.test_last_charge_end
+    data:
+      datetime: "{{ end_dt }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_last_charge_end_soc
+    data:
+      value: "{{ test_end_soc }}"
+  - action: input_number.set_value
+    target:
+      entity_id: input_number.test_charge_end_energy_kwh
+    data:
+      value: "{{ test_end_energy }}"
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.test_last_charge_end_status
+    data:
+      value: Complete
+  - action: input_text.set_value
+    target:
+      entity_id: input_text.test_last_charge_type
+    data:
+      value: "{{ charge_type_text }}"
+  - action: input_datetime.set_datetime
+    target:
+      entity_id: input_datetime.test_last_finished
+    data:
+      datetime: "{{ end_dt }}"
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.r5_charge_session_active
+  - action: input_boolean.turn_off
+    target:
+      entity_id: input_boolean.r5_test_mode
+  - action: persistent_notification.create
+    data:
+      title: "R5 TEST: Finished (Panel)"
+      message: |
+        End {{ end_dt }} | Status=Complete | Panel stays visible for 60s.
+      notification_id: r5_charge_test_panel_end
+mode: single

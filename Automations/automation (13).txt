@@ -1,0 +1,63 @@
+alias: (13) R5 - Re-Snapshot Plug Baseline When Plugged Again (Clears Derived)
+description: >-
+  If plug status was previously marked Derived due to "drove" logic, refresh the
+  baseline once we have strong evidence the car is plugged again.
+triggers:
+  - entity_id: sensor.r5_battery_raw
+    trigger: state
+  - entity_id: sensor.r5_charger_plug_status_api
+    trigger: state
+conditions:
+  - condition: template
+    value_template: >-
+      {% set bd = state_attr('sensor.r5_battery_raw','data') %} {% set bd = bd
+      if bd is mapping else {} %} {% set ok = bd.get('ok', false) %} {% set err
+      = (bd.get('error') | string | lower | trim) %} {{ ok and err not in
+      ['cli_prompted','unauthorized','timeout','parse_error'] }}
+  - condition: template
+    value_template: >-
+      {% set ba = state_attr('sensor.r5_battery_raw','data') %} {% set ba = ba
+      if ba is mapping else {} %} {% set a = ba.get('attributes') if
+      ba.get('attributes') is mapping else {} %}
+
+      {% set plug = (a.get('plugStatus', none) | string | trim) %} {% set chg  =
+      (a.get('chargingStatus', none) | string | trim) %}
+
+      {% set stuck =
+      state_attr('sensor.r5_charger_plug_status_api','stuck_rule_triggered') |
+      string | lower %}
+
+      {% set rem_filtered = states('sensor.r5_charging_remaining_time_api') |
+      int(0) %} {% set strong_evidence = (chg == '1.0') or (rem_filtered > 10)
+      %}
+
+      {{ plug == '1'
+         and stuck == 'connected_but_drove'
+         and strong_evidence }}
+actions:
+  - variables:
+      bd: "{{ state_attr('sensor.r5_battery_raw', 'data') }}"
+      bd2: "{{ bd if bd is mapping else {} }}"
+      ba: >-
+        {{ bd2.get('attributes', {}) if bd2.get('attributes') is mapping else {}
+        }}
+      soc: "{{ ba.get('batteryLevel') | int(0) }}"
+      cd: "{{ state_attr('sensor.r5_cockpit_raw', 'data') }}"
+      cd2: "{{ cd if cd is mapping else {} }}"
+      ca: >-
+        {{ cd2.get('attributes', {}) if cd2.get('attributes') is mapping else {}
+        }}
+      km: "{{ ca.get('totalMileage') | float(0) }}"
+  - data:
+      entity_id: input_number.r5_plug_baseline_soc
+      value: "{{ soc }}"
+    action: input_number.set_value
+  - data:
+      entity_id: input_number.r5_plug_baseline_mileage_km
+      value: "{{ km | round(0) }}"
+    action: input_number.set_value
+  - data:
+      entity_id: input_datetime.r5_plug_baseline_ts
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+    action: input_datetime.set_datetime
+mode: restart

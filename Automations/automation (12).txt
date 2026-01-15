@@ -1,0 +1,67 @@
+alias: (12) R5 - Track Suspected Stuck Plug State
+description: >-
+  If the API says Plugged but there is no charging evidence, latch a "suspect"
+  flag and record when it started. Suppressed during CLI/auth/stale conditions.
+  Clears automatically when evidence returns.
+triggers:
+  - trigger: state
+    entity_id:
+      - sensor.r5_battery_raw
+      - <ev-charger-power>
+actions:
+  - variables:
+      cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+      auth_fail: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+      stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+      bd: "{{ state_attr('sensor.r5_battery_raw', 'data') }}"
+      bd2: "{{ bd if bd is mapping else {} }}"
+      ok: "{{ bd2.get('ok', false) }}"
+      err: "{{ (bd2.get('error') | string | lower | trim) }}"
+      ba: >-
+        {{ bd2.get('attributes', {}) if bd2.get('attributes') is mapping else {}
+        }}
+      plug_code: "{{ (ba.get('plugStatus', none) | string | trim) }}"
+      chg_code: "{{ (ba.get('chargingStatus', none) | string | trim) }}"
+      rem_filt: "{{ states('sensor.r5_charging_remaining_time_api') | int(0) }}"
+      hv_kw: "{{ states('<ev-charger-power>') | float(0) }}"
+      untrusted: |-
+        {{
+          cli_prompted
+          or auth_fail
+          or stale
+          or (not ok)
+          or (err in ['cli_prompted','unauthorized','timeout','parse_error'])
+        }}
+      charging_evidence: "{{ (hv_kw >= 0.1) or (chg_code == '1.0') or (rem_filt > 10) }}"
+      suspect_now: |-
+        {{
+          (not untrusted)
+          and (plug_code == '1')
+          and (not charging_evidence)
+          and (chg_code in ['0.0','0.1','0.2','0.3'])
+          and (rem_filt <= 0)
+        }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ suspect_now }}"
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: state
+                    entity_id: input_boolean.r5_plug_suspect_active
+                    state: "off"
+                sequence:
+                  - action: input_boolean.turn_on
+                    target:
+                      entity_id: input_boolean.r5_plug_suspect_active
+                  - action: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.r5_plug_suspect_since
+                    data:
+                      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+    default:
+      - action: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.r5_plug_suspect_active
+mode: restart

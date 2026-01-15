@@ -1,0 +1,179 @@
+alias: (1) R5 Charge Session - Capture Start (RAW/API)
+description: >-
+  Start a local charge session and snapshot start metrics (RAW/API + Home Charger
+  fallbacks). Includes safety check if Renault status stays On Hold.
+triggers:
+  - entity_id: <ev-charger-power>
+    above: 0.2
+    for: "00:01:00"
+    trigger: numeric_state
+  - entity_id: sensor.r5_charger_status_api
+    to: In Progress
+    trigger: state
+  - trigger: template
+    value_template: >-
+      {% set plug = states('sensor.r5_charger_plug_status_api') | lower | trim
+      %} {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0)
+      %} {{ plug.startswith('connected') and ('(d)' not in plug) and rem > 10 }}
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "off"
+  - condition: state
+    entity_id: input_boolean.r5_test_mode
+    state: "off"
+  - condition: template
+    value_template: >-
+      {% set d = state_attr('sensor.r5_battery_raw','data') %} {% set d = d if d
+      is mapping else {} %} {% set ok = d.get('ok', false) %} {% set err =
+      (d.get('error') | string | lower | trim) %} {{ ok and err not in
+      ['cli_prompted','unauthorized','timeout','parse_error'] }}
+  - condition: template
+    value_template: >-
+      {% set status = states('sensor.r5_charger_status_api') | string | trim %}
+      {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+      {% set hv = states('<ev-charger-power>') | float(0) %} {{ status ==
+      'In Progress' or rem > 10 or hv > 0.2 }}
+  - condition: template
+    value_template: >-
+      {% set d = state_attr('sensor.r5_battery_raw','data') %} {% set d = d if d
+      is mapping else {} %} {% set a = d.get('attributes') %} {% set a = a if a
+      is mapping else {} %} {% set soc_now = a.get('batteryLevel', 0) | int(0)
+      %} {% set soc_target = states('sensor.r5_soc_max_target_api') | int(100)
+      %} {{ soc_now < soc_target }}
+  - condition: template
+    value_template: "{{ states('sensor.r5_charger_status_api') not in ['Charge Ended'] }}"
+actions:
+  - target:
+      entity_id: input_boolean.r5_charge_session_active
+    action: input_boolean.turn_on
+  - target:
+      entity_id: input_text.r5_last_charge_end_status
+    data:
+      value: ""
+    action: input_text.set_value
+  - target:
+      entity_id:
+        - input_number.r5_last_charge_end_soc
+        - input_number.r5_last_charge_recovered_pct
+        - input_number.r5_last_charge_duration_min
+        - input_number.r5_charge_end_energy_kwh
+        - input_number.r5_charge_recovered_energy_kwh
+        - input_number.r5_hv_avg_accum_kw
+        - input_number.r5_hv_avg_count
+    data:
+      value: 0
+    action: input_number.set_value
+  - target:
+      entity_id: input_number.r5_charge_start_energy_kwh
+    data:
+      value: 0
+    action: input_number.set_value
+  - variables:
+      existing_start_energy: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) }}"
+      start_already_captured: "{{ existing_start_energy > 1 }}"
+      hv_kw: "{{ states('<ev-charger-power>') | float(0) | round(1) }}"
+      soc_now: >-
+        {% set d = state_attr('sensor.r5_status_raw','data') %} {% set d = d if
+        d is mapping else {} %} {% set a = d.get('attributes') %} {% set a = a
+        if a is mapping else {} %} {{ a.get('batteryLevel', 0) | int(0) }}
+      cap_kwh: "{{ states('input_number.r5_battery_capacity_kwh') | float(52) }}"
+      base_soc: "{{ states('input_number.r5_plug_baseline_soc') | int(-1) }}"
+      base_ts_s: "{{ states('input_datetime.r5_plug_baseline_ts') }}"
+      base_ts: "{{ as_timestamp(base_ts_s, 0) }}"
+      base_age_s: >-
+        {{ (as_timestamp(now()) - base_ts) | int(999999) if base_ts > 0 else
+        999999 }}
+      base_fresh: "{{ base_soc >= 0 and base_soc <= 100 and base_age_s <= 600 }}"
+      soc_start_final: |-
+        {% if base_fresh %}
+          {{ base_soc }}
+        {% else %}
+          {{ soc_now }}
+        {% endif %}
+      avail_energy_s: "{{ states('sensor.r5_available_energy_52_api') }}"
+      avail_energy: >-
+        {{ avail_energy_s | float(-1) if avail_energy_s not in
+        ['unknown','unavailable','none',''] else -1 }}
+      start_energy_calc: "{{ (cap_kwh * (soc_start_final|float(0)) / 100) | float(0) }}"
+      start_energy_final: |-
+        {% if avail_energy >= 0 %}
+          {{ avail_energy }}
+        {% else %}
+          {{ start_energy_calc }}
+        {% endif %}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ not start_already_captured }}"
+        sequence:
+          - target:
+              entity_id: input_datetime.r5_last_charge_start
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+            action: input_datetime.set_datetime
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ hv_kw > 0.2 }}"
+                sequence:
+                  - target:
+                      entity_id: input_datetime.r5_last_nonzero_power_seen
+                    data:
+                      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                    action: input_datetime.set_datetime
+          - target:
+              entity_id: input_number.r5_last_charge_start_soc
+            data:
+              value: "{{ soc_start_final }}"
+            action: input_number.set_value
+          - target:
+              entity_id: input_number.r5_last_charge_start_power_kw
+            data:
+              value: "{{ hv_kw }}"
+            action: input_number.set_value
+          - target:
+              entity_id: input_number.r5_charge_start_energy_kwh
+            data:
+              value: "{{ start_energy_final | round(1) }}"
+            action: input_number.set_value
+          - data:
+              title: R5 Charge Session Started (RAW/API)
+              message: >-
+                Start {{ now().strftime('%Y-%m-%d %H:%M:%S') }}, SoC_now={{
+                soc_now }}%, SoC_start={{ soc_start_final }}%{% if base_fresh %}
+                (baseline){% endif %}, P={{ hv_kw }} kW, E_start={{
+                start_energy_final | round(1) }} kWh
+              notification_id: r5_charge_debug
+            action: persistent_notification.create
+  - delay: "00:03:00"
+  - choose:
+      - conditions:
+          - condition: state
+            entity_id: input_boolean.r5_charge_session_active
+            state: "on"
+          - condition: state
+            entity_id: sensor.r5_charger_status_api
+            state: On Hold
+        sequence:
+          - action: persistent_notification.create
+            data:
+              title: R5 Renault API
+              message: >-
+                Charging detected via Home Charger, but Renault still shows 'On
+                Hold' after 3 min. Attempting login + RAW refresh.
+              notification_id: r5_api_auth
+          - action: shell_command.r5_api_login
+          - delay: "00:00:10"
+          - action: homeassistant.update_entity
+            target:
+              entity_id:
+                - sensor.r5_battery_raw
+                - sensor.r5_status_raw
+                - sensor.r5_charges_raw
+                - sensor.r5_soc_levels_raw
+                - sensor.r5_hvac_raw
+                - sensor.r5_ev_settings_raw
+                - sensor.r5_cockpit_raw
+                - sensor.r5_location_raw
+mode: single

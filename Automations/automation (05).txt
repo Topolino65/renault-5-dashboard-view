@@ -1,0 +1,50 @@
+alias: (5) R5 Charge Session - End Of Charge Catcher (Polling) (RAW/API)
+description: >-
+  Failsafe: if session is active but API+HV indicate we're done, finalize.
+  Suffix-safe + rem-stickiness safe.
+triggers:
+  - minutes: /1
+    trigger: time_pattern
+conditions:
+  - condition: state
+    entity_id: input_boolean.r5_charge_session_active
+    state: "on"
+  - condition: template
+    value_template: >-
+      {% set bd = state_attr('sensor.r5_battery_raw', 'data') %} {% set bd = bd
+      if bd is mapping else {} %} {% set ok = bd.get('ok', false) %} {% set err
+      = (bd.get('error') | string | lower | trim) %} {{ ok and err not in
+      ['cli_prompted','unauthorized','timeout','parse_error'] }}
+actions:
+  - variables:
+      hv_on: "{{ (states('<ev-charger-power>') | float(0)) > 0.2 }}"
+      plug: "{{ states('sensor.r5_charger_plug_status_api') }}"
+      plug_l: "{{ plug | lower | trim }}"
+      plug_disconnected: >-
+        {{ plug_l.startswith('disconnected') or plug_l.startswith('unknown') or
+        ('unknown' in plug_l) }}
+      plug_stuck: "{{ '(d)' in plug_l }}"
+      cs: "{{ states('sensor.r5_charger_status_api') | string | trim }}"
+      cs_l: "{{ cs | lower }}"
+      rem: "{{ states('sensor.r5_charging_remaining_time_api') | int(0) }}"
+      api_not_charging: >-
+        {{ ('not charging' in cs_l) or ('charge ended' in cs_l) or ('charge
+        error' in cs_l) }}
+      done: |-
+        {{ (not hv_on)
+           and (
+             plug_disconnected
+             or ('charge ended' in cs_l)
+             or ('charge error' in cs_l)
+           )
+           and (rem <= 0)
+           and (not plug_stuck) }}
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ done }}"
+        sequence:
+          - target:
+              entity_id: script.r5_capture_end_force
+            action: script.turn_on
+mode: restart

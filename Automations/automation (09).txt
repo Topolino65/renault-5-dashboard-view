@@ -1,0 +1,30 @@
+alias: (9) R5 - Publish RAW Location To MQTT
+description: ""
+triggers:
+  - entity_id: sensor.r5_location_raw
+    trigger: state
+actions:
+  - variables:
+      root: "{{ state_attr('sensor.r5_location_raw','data') }}"
+      rootm: "{{ root if root is mapping else {} }}"
+      a: >-
+        {{ rootm.get('attributes', {}) if rootm.get('attributes') is mapping
+        else {} }}
+      lat: "{{ a.get('gpsLatitude') }}"
+      lon: "{{ a.get('gpsLongitude') }}"
+      ts: "{{ a.get('lastUpdateTime') }}"
+  - condition: template
+    value_template: "{{ lat is number and lon is number }}"
+  - data:
+      topic: r5/location_raw
+      retain: true
+      payload: |-
+        {{ {
+          "latitude": (lat | float),
+          "longitude": (lon | float),
+          "gps_accuracy": 20,
+          "source_type": "gps",
+          "last_update": ts
+        } | tojson }}
+    action: mqtt.publish
+mode: restart
