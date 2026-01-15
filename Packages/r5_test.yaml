@@ -1,0 +1,9 @@
+input_boolean:
+  r5_test_mode:
+    name: R5 Test Mode
+    icon: mdi:flask
+
+input_button:
+  r5_test_charge_run:
+    name: R5 Test Charge Run
+    icon: mdi:flask-outline
