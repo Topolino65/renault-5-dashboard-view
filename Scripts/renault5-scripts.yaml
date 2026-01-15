@@ -1,0 +1,1081 @@
+##### Renault 5 Scripts #####
+
+  r5_flash_lights_now:
+    alias: "R5 Flash Lights (CLI)"
+    mode: single
+    sequence:
+      - service: shell_command.r5_hornlights
+        data:
+          account_id: !secret renault_account_id
+          vin: !secret renault_vin
+          target: lights
+      - service: persistent_notification.create
+        data:
+          title: Renault 5
+          message: "Command Sent: Flash Lights"
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: Renault 5
+          message: "Command Sent: Flash Lights"    
+
+  r5_beep_horn_now:
+    alias: "R5 Beep Horn (CLI)"
+    mode: single
+    sequence:
+      - service: shell_command.r5_hornlights
+        data:
+         account_id: !secret renault_account_id
+         vin: !secret renault_vin
+         target: horn
+      - service: persistent_notification.create
+        data:
+          title: Renault 5
+          message: "Command Sent: Beep Horn"
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: Renault 5
+          message: "Command Sent: Beep Horn"
+         
+  r5_charge_start:
+    alias: "R5 Start Charging"
+    mode: single
+    sequence:
+      - service: shell_command.r5_charge_action
+        data:
+         account_id: !secret renault_account_id
+         vin: !secret renault_vin
+         action: start
+      - service: persistent_notification.create
+        data:
+          title: Renault 5
+          message: "Command Sent: Start Charging"
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: Renault 5
+          message: "Command Sent: Start Charging"
+
+  r5_charge_stop:
+    alias: "R5 Stop Charging"
+    mode: single
+    sequence:
+      - service: shell_command.r5_charge_action
+        data:
+         account_id: !secret renault_account_id
+         vin: !secret renault_vin
+         action: stop
+      - service: persistent_notification.create
+        data:
+          title: Renault 5
+          message: "Command Sent: Stop Charging"
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: Renault 5
+          message: "Command Sent: Stop Charging"
+          
+  r5_hvac_start:
+    alias: "R5 HVAC Start (resilient)"
+    mode: restart
+    fields:
+      temperature:
+        description: "Target temperature in °C"
+        selector:
+          number:
+            min: 16
+            max: 28
+            step: 1
+            unit_of_measurement: "°C"
+
+    variables:
+      _temp: "{{ (temperature | default(21)) | int }}"
+
+      # Snapshot BEFORE sending command
+      _before: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set d = d if d is mapping else {} %}
+        {% set a = d.get('attributes') %}
+        {% set a = a if a is mapping else {} %}
+        {{ a }}
+
+      _before_ts: "{{ as_timestamp(_before.get('lastUpdateTime'), 0) }}"
+      _before_fetched: "{{ as_timestamp((state_attr('sensor.r5_hvac_raw','data') or {}).get('fetched_at'), 0) }}"
+
+    sequence:
+      # Send HVAC start
+      - service: shell_command.r5_hvac_start
+        data:
+          account_id: !secret renault_account_id
+          vin: !secret renault_vin
+          temperature: "{{ _temp }}"
+
+      # Confirmation loop (try for ~5 minutes)
+      - repeat:
+          count: 10
+          sequence:
+            - delay: "00:00:30"
+
+            - service: homeassistant.update_entity
+              target:
+                entity_id: sensor.r5_hvac_raw
+
+            - variables:
+                _now: >-
+                  {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+                  {% set d = d if d is mapping else {} %}
+                  {% set a = d.get('attributes') %}
+                  {{ a if a is mapping else {} }}
+
+                _hv: "{{ (_now.get('hvacStatus','unknown') | string | lower | trim) }}"
+                _ts: "{{ as_timestamp(_now.get('lastUpdateTime'), 0) }}"
+                _fetched: "{{ as_timestamp((state_attr('sensor.r5_hvac_raw','data') or {}).get('fetched_at'), 0) }}"
+
+                # Telemetry considered "stale" if lastUpdateTime didn't advance for 48 hours (tune if you want)
+                _telemetry_stale: >-
+                  {{ _ts > 0 and (now().timestamp() - _ts) > (48*3600) }}
+
+            # If we actually see HVAC ON, confirm immediately
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _hv == 'on' }}"
+                  sequence:
+                    - service: notify.mobile_app_<your-mobile-id>
+                      data:
+                        title: "Renault 5"
+                        message: "HVAC confirmed ON ({{ _temp }}°C)."
+                    - service: persistent_notification.create
+                      data:
+                        title: "R5 HVAC"
+                        message: "HVAC START confirmed ON ({{ _temp }}°C)."
+                        notification_id: r5_hvac_status
+                    - stop: "HVAC started successfully (confirmed)"
+
+                # If telemetry is stale, don't keep looping forever — treat as accepted but unconfirmable
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _telemetry_stale }}"
+                  sequence:
+                    - service: notify.mobile_app_<your-mobile-id>
+                      data:
+                        title: "Renault 5"
+                        message: >-
+                          HVAC START accepted ({{ _temp }}°C), but Renault telemetry is stale
+                          (lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}). Cannot confirm state.
+                    - service: persistent_notification.create
+                      data:
+                        title: "R5 HVAC"
+                        message: >-
+                          HVAC START accepted ({{ _temp }}°C), but telemetry is stale
+                          (lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}). Treat as unknown.
+                        notification_id: r5_hvac_status
+                    - stop: "HVAC accepted but telemetry stale"
+
+      # If we get here, telemetry is not stale but never showed ON
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: "Renault 5"
+          message: >-
+            HVAC START accepted ({{ _temp }}°C), but status never confirmed ON within 5 minutes.
+            lastUpdateTime={{ (state_attr('sensor.r5_hvac_raw','data') or {}).get('attributes', {}).get('lastUpdateTime','n/a') }}.
+      - service: persistent_notification.create
+        data:
+          title: "R5 HVAC"
+          message: >-
+            HVAC START accepted ({{ _temp }}°C) but not confirmed ON within 5 minutes.
+            This is usually Renault API lag.
+          notification_id: r5_hvac_status
+
+  r5_hvac_stop:
+    alias: "R5 HVAC Stop (resilient)"
+    mode: restart
+    sequence:
+      - service: shell_command.r5_hvac_stop
+        data:
+          account_id: !secret renault_account_id
+          vin: !secret renault_vin
+
+      - repeat:
+          count: 6
+          sequence:
+            - delay: "00:00:30"
+            - service: homeassistant.update_entity
+              target:
+                entity_id: sensor.r5_hvac_raw
+
+            - variables:
+                _now: >-
+                  {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+                  {% set d = d if d is mapping else {} %}
+                  {% set a = d.get('attributes') %}
+                  {{ a if a is mapping else {} }}
+
+                _hv: "{{ (_now.get('hvacStatus','unknown') | string | lower | trim) }}"
+                _ts: "{{ as_timestamp(_now.get('lastUpdateTime'), 0) }}"
+                _telemetry_stale: >-
+                  {{ _ts > 0 and (now().timestamp() - _ts) > (48*3600) }}
+
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _hv == 'off' }}"
+                  sequence:
+                    - service: notify.mobile_app_<your-mobile-id>
+                      data:
+                        title: "Renault 5"
+                        message: "HVAC confirmed OFF."
+                    - service: persistent_notification.create
+                      data:
+                        title: "R5 HVAC"
+                        message: "HVAC STOP confirmed OFF."
+                        notification_id: r5_hvac_status
+                    - stop: "Stopped successfully (confirmed)"
+
+                - conditions:
+                    - condition: template
+                      value_template: "{{ _telemetry_stale }}"
+                  sequence:
+                    - service: notify.mobile_app_<your-mobile-id>
+                      data:
+                        title: "Renault 5"
+                        message: >-
+                          HVAC STOP sent, but Renault telemetry is stale (lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}).
+                          Cannot confirm OFF.
+                    - service: persistent_notification.create
+                      data:
+                        title: "R5 HVAC"
+                        message: >-
+                          HVAC STOP sent, but telemetry is stale (lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}).
+                          Treat state as unknown.
+                        notification_id: r5_hvac_status
+                    - stop: "Stop accepted but telemetry stale"
+
+      # If first stop didn't confirm, try legacy cancel once
+      - service: shell_command.r5_hvac_stop_legacy
+        data:
+          account_id: !secret renault_account_id
+          vin: !secret renault_vin
+
+      - delay: "00:00:45"
+      - service: homeassistant.update_entity
+        target:
+          entity_id: sensor.r5_hvac_raw
+
+      - variables:
+          _now: >-
+            {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+            {% set d = d if d is mapping else {} %}
+            {% set a = d.get('attributes') %}
+            {{ a if a is mapping else {} }}
+          _hv: "{{ (_now.get('hvacStatus','unknown') | string | lower | trim) }}"
+          _ts: "{{ as_timestamp(_now.get('lastUpdateTime'), 0) }}"
+          _telemetry_stale: >-
+            {{ _ts > 0 and (now().timestamp() - _ts) > (48*3600) }}
+
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ _hv == 'off' }}"
+            sequence:
+              - service: notify.mobile_app_<your-mobile-id>
+                data:
+                  title: "Renault 5"
+                  message: "HVAC confirmed OFF (legacy cancel)."
+              - service: persistent_notification.create
+                data:
+                  title: "R5 HVAC"
+                  message: "HVAC STOP confirmed OFF (legacy cancel)."
+                  notification_id: r5_hvac_status
+              - stop: "Stopped successfully (legacy confirmed)"
+
+          - conditions:
+              - condition: template
+                value_template: "{{ _telemetry_stale }}"
+            sequence:
+              - service: notify.mobile_app_<your-mobile-id>
+                data:
+                  title: "Renault 5"
+                  message: >-
+                    HVAC STOP sent (legacy), but Renault telemetry is stale (lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}).
+                    Cannot confirm.
+              - stop: "Stop sent but telemetry stale"
+
+      # Final: no confirmation, but do not claim it's still ON
+      - service: notify.mobile_app_<your-mobile-id>
+        data:
+          title: "Renault 5"
+          message: >-
+            HVAC STOP sent, but status did not confirm OFF. This is usually Renault API lag.
+            Current hvacStatus={{ _hv }} lastUpdateTime={{ _now.get('lastUpdateTime','n/a') }}.
+  
+  r5_diag:
+    alias: "R5 Diag"
+    mode: single
+    sequence:
+      - service: shell_command.r5_diag
+      
+  r5_capture_start:
+    alias: "R5 – Capture start snapshot (RAW/API)"
+    mode: single
+    sequence:
+      - service: input_boolean.turn_on
+        target:
+          entity_id: input_boolean.r5_charge_session_active
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_charge_end
+        data:
+          datetime: "1970-01-01 00:00:00"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_end_status
+        data:
+          value: ""
+
+      - service: input_number.set_value
+        target:
+          entity_id:
+            - input_number.r5_last_charge_end_soc
+            - input_number.r5_last_charge_recovered_pct
+            - input_number.r5_last_charge_duration_min
+            - input_number.r5_charge_end_energy_kwh
+            - input_number.r5_charge_recovered_energy_kwh
+            - input_number.r5_hv_avg_accum_kw
+            - input_number.r5_hv_avg_count
+        data:
+          value: 0
+
+      - variables:
+          d: "{{ state_attr('sensor.r5_status_raw','data') or {} }}"
+          a: "{{ d.get('attributes') or {} }}"
+          soc_start: "{{ a.get('batteryLevel', 0) | int(0) }}"
+          hv_kw: "{{ states('<ev-charger-power-output>') | float(0) | round(1) }}"
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_charge_start
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_nonzero_power_seen
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_start_soc
+        data:
+          value: "{{ soc_start }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_start_power_kw
+        data:
+          value: "{{ hv_kw }}"
+
+      - variables:
+          cap: "{{ states('input_number.r5_battery_capacity_kwh') | float(52) }}"
+          rem1: "sensor.renault5_battery_remaining_energy_kwh"
+          rem2: "sensor.renault_5_battery_remaining_energy"
+          start_energy: >-
+            {% set v1 = states(rem1) %}
+            {% set v2 = states(rem2) %}
+            {% if v1 not in ['unknown','unavailable','none',''] %}
+              {{ v1 | float(0) }}
+            {% elif v2 not in ['unknown','unavailable','none',''] %}
+              {{ v2 | float(0) }}
+            {% else %}
+              {{ (cap * (soc_start | float(0)) / 100.0) | float(0) }}
+            {% endif %}
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_start_energy_kwh
+        data:
+          value: "{{ start_energy | round(1) }}"
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 charge START (RAW/API)"
+          message: >-
+            Start {{ now().strftime('%Y-%m-%d %H:%M:%S') }},
+            SoC={{ soc_start }}%,
+            Start power={{ hv_kw }} kW,
+            E_start={{ start_energy | round(1) }} kWh
+          notification_id: r5_charge_debug
+
+  r5_capture_end:
+    alias: "R5 – Capture end snapshot (RAW/API)"
+    mode: restart
+    sequence:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.r5_test_mode
+                state: "on"
+            sequence:
+              - variables:
+                  ba: "{{ (state_attr('sensor.r5_battery_raw','data') or {}).get('attributes', {}) }}"
+                  soc_end: "{{ ba.get('batteryLevel', 0) | int(0) }}"
+                  soc_start: "{{ states('input_number.r5_last_charge_start_soc') | int(0) }}"
+
+                  recovered_pct: >-
+                    {% set diff = (soc_end | int(0)) - (soc_start | int(0)) %}
+                    {{ diff }}
+
+                  duration_min: >-
+                    {% set s = states('input_datetime.r5_last_charge_start') %}
+                    {% set e = states('input_datetime.r5_last_charge_end') %}
+                    {% set st = as_timestamp(s, 0) %}
+                    {% set et = as_timestamp(e, 0) %}
+                    {% if st > 0 and et > 0 and et >= st %}
+                      {{ ((et - st) / 60) | round(0) }}
+                    {% else %}
+                      5
+                    {% endif %}
+
+                  end_status: "Test"
+
+                  start_energy: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) }}"
+                  end_energy_s: "{{ states('sensor.r5_available_energy_52_kwh_api') }}"
+                  end_energy: "{{ end_energy_s | float(0) if end_energy_s not in ['unknown','unavailable','none',''] else 0 }}"
+
+                  recovered_energy: >-
+                    {{ (end_energy | float(0)) - (start_energy | float(0)) }}
+
+                  avg_pow: 3.6
+
+                  charge_type: >-
+                    {% set mins = duration_min | float(0) %}
+                    {% set hours = mins / 60.0 %}
+                    {% set avg_from_energy = ((recovered_energy / hours) if hours > 0 else 0) %}
+                    {% set p = avg_from_energy | float(0) %}
+                    {% if p >= 80 %} Rapid DC
+                    {% elif p >= 40 %} Fast DC
+                    {% elif p >= 11 %} Fast AC
+                    {% elif p > 0 %} Slow AC
+                    {% else %} n/a {% endif %}
+
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.r5_last_charge_end
+                data:
+                  datetime: >-
+                    {% set e = states('input_datetime.r5_last_charge_end') %}
+                    {% if e in ['unknown','unavailable','none',''] %}
+                      {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+                    {% else %}
+                      {{ e }}
+                    {% endif %}
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_last_charge_end_soc
+                data:
+                  value: "{{ soc_end }}"
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_last_charge_recovered_pct
+                data:
+                  value: "{{ recovered_pct }}"
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_last_charge_duration_min
+                data:
+                  value: "{{ duration_min }}"
+
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.r5_last_charge_end_status
+                data:
+                  value: "{{ end_status }}"
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_charge_end_energy_kwh
+                data:
+                  value: "{{ end_energy | round(1) }}"
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_charge_recovered_energy_kwh
+                data:
+                  value: "{{ recovered_energy | round(2) }}"
+
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.r5_last_charge_average_power_kw
+                data:
+                  value: "{{ avg_pow }}"
+
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.r5_last_charge_type
+                data:
+                  value: "{{ charge_type }}"
+
+              - service: persistent_notification.create
+                data:
+                  title: "R5 charge END (RAW/API)"
+                  message: >-
+                    [TEST] End {{ now().strftime('%Y-%m-%d %H:%M:%S') }},
+                    SoC start={{ soc_start }}%,
+                    SoC end={{ soc_end }}%,
+                    ΔSoC={{ recovered_pct }}%,
+                    duration={{ duration_min }} min,
+                    E_start={{ start_energy | round(1) }} kWh,
+                    E_end={{ end_energy | round(1) }} kWh,
+                    ΔE={{ recovered_energy | round(2) }} kWh,
+                    avgP={{ avg_pow }} kW,
+                    type={{ charge_type }},
+                    status={{ end_status }}
+                  notification_id: r5_charge_debug
+
+              - stop: "Test mode end snapshot complete"
+
+      - delay: "00:02:00"
+
+      - service: homeassistant.update_entity
+        target:
+          entity_id:
+            - sensor.r5_charges_raw
+            - sensor.r5_battery_raw
+            - sensor.r5_status_raw
+
+      - delay: "00:00:10"
+
+      - variables:
+          end_soc_api_s: "{{ states('sensor.r5_last_charge_end_soc_api') }}"
+          end_soc_api: "{{ end_soc_api_s | int(0) if end_soc_api_s not in ['unknown','unavailable','none',''] else 0 }}"
+
+          ba: "{{ (state_attr('sensor.r5_battery_raw','data') or {}).get('attributes', {}) }}"
+          end_soc_fallback: "{{ ba.get('batteryLevel', 0) | int(0) }}"
+
+          soc_end: >-
+            {% if end_soc_api > 0 %}
+              {{ end_soc_api }}
+            {% else %}
+              {{ end_soc_fallback }}
+            {% endif %}
+
+          soc_start: "{{ states('input_number.r5_last_charge_start_soc') | int(0) }}"
+
+          recovered_pct: >-
+            {% set diff = (soc_end | int(0)) - (soc_start | int(0)) %}
+            {{ [diff, 0] | max }}
+
+          dur_api_s: "{{ states('sensor.r5_last_charge_duration_api') }}"
+          duration_min: >-
+            {% if dur_api_s not in ['unknown','unavailable','none',''] and (dur_api_s | int(0)) > 0 %}
+              {{ dur_api_s | int(0) }}
+            {% else %}
+              {% set s = states('input_datetime.r5_last_charge_start') %}
+              {% set e = states('input_datetime.r5_last_charge_end') %}
+              {% set st = as_timestamp(s, 0) %}
+              {% set et = as_timestamp(e, 0) %}
+              {% if st > 0 and et > 0 and et >= st %}
+                {{ ((et - st) / 60) | round(0) }}
+              {% else %}
+                0
+              {% endif %}
+            {% endif %}
+
+          end_status: >-
+            {% set st = states('sensor.r5_charger_status_api') %}
+            {% if st not in ['unknown','unavailable','none',''] %}
+              {{ st }}
+            {% else %}
+              unknown
+            {% endif %}
+
+          start_energy: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) }}"
+          cap_kwh: "{{ states('input_number.r5_battery_capacity_kwh') | float(52) }}"
+
+          end_energy_api_s: "{{ states('sensor.r5_available_energy_52_kwh_api') }}"
+          end_energy_api: "{{ end_energy_api_s | float(-1) if end_energy_api_s not in ['unknown','unavailable','none',''] else -1 }}"
+
+          end_energy_fallback: "{{ (cap_kwh * (soc_end | float(0)) / 100.0) | float(0) }}"
+
+          end_energy: >-
+            {% if end_energy_api >= 0 %}
+              {{ end_energy_api }}
+            {% else %}
+              {{ end_energy_fallback }}
+            {% endif %}
+
+          recovered_energy: >-
+            {% set diff = (end_energy | float(0)) - (start_energy | float(0)) %}
+            {{ [diff, 0.0] | max }}
+
+          hv_acc: "{{ states('input_number.r5_hv_avg_accum_kw') | float(0) }}"
+          hv_cnt: "{{ states('input_number.r5_hv_avg_count') | float(0) }}"
+          hv_avg_from_samples: "{{ (hv_acc / hv_cnt) if hv_cnt > 0 else -1 }}"
+
+          avg_from_energy: >-
+            {% set mins = duration_min | float(0) %}
+            {% set hours = mins / 60.0 %}
+            {{ ((recovered_energy / hours) if hours > 0 else 0) }}
+
+          avg_pow: >-
+            {% if hv_avg_from_samples >= 0 %}
+              {{ hv_avg_from_samples | round(1) }}
+            {% else %}
+              {{ avg_from_energy | round(1) }}
+            {% endif %}
+
+          charge_type: >-
+            {% set p = avg_pow | float(0) %}
+            {% if p >= 80 %} Rapid DC
+            {% elif p >= 40 %} Fast DC
+            {% elif p >= 11 %} Fast AC
+            {% elif p > 0 %} Slow AC
+            {% else %} n/a {% endif %}
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_charge_end
+        data:
+          datetime: >-
+            {% set e = states('input_datetime.r5_last_charge_end') %}
+            {% if e in ['unknown','unavailable','none',''] %}
+              {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+            {% else %}
+              {{ e }}
+            {% endif %}
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_end_soc
+        data:
+          value: "{{ soc_end }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_recovered_pct
+        data:
+          value: "{{ recovered_pct }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_duration_min
+        data:
+          value: "{{ duration_min }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_end_status
+        data:
+          value: "{{ end_status }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_end_energy_kwh
+        data:
+          value: "{{ end_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_recovered_energy_kwh
+        data:
+          value: "{{ recovered_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_average_power_kw
+        data:
+          value: "{{ avg_pow }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_type
+        data:
+          value: "{{ charge_type }}"
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 charge END (RAW/API)"
+          message: >-
+            End {{ now().strftime('%Y-%m-%d %H:%M:%S') }},
+            SoC start={{ soc_start }}%,
+            SoC end={{ soc_end }}%,
+            ΔSoC={{ recovered_pct }}%,
+            duration={{ duration_min }} min,
+            E_start={{ start_energy | round(1) }} kWh,
+            E_end={{ end_energy | round(1) }} kWh,
+            ΔE={{ recovered_energy | round(1) }} kWh,
+            avgP={{ avg_pow }} kW,
+            type={{ charge_type }},
+            status={{ end_status }}
+          notification_id: r5_charge_debug
+          
+  r5_capture_end_force:
+    alias: "R5 – Capture END (force) (RAW/API)"
+    mode: single
+    sequence:
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.r5_test_mode
+                state: "on"
+            sequence:
+              - stop: "Blocked during test mode"
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 – END FORCE"
+          message: "Forced end at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          notification_id: r5_charge_debug
+
+      - service: script.r5_capture_end
+
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.r5_charge_session_active
+          
+  r5_capture_end_force_fast:
+    alias: "R5 – Capture END (force fast) (RAW/API)"
+    mode: restart
+    sequence:
+      - service: persistent_notification.create
+        data:
+          title: "R5 – END FORCE (FAST)"
+          message: "Forced FAST end at {{ now().strftime('%Y-%m-%d %H:%M:%S') }} (no 2-min wait)"
+          notification_id: r5_charge_debug
+
+      - service: homeassistant.update_entity
+        target:
+          entity_id:
+            - sensor.r5_charges_raw
+            - sensor.r5_battery_raw
+            - sensor.r5_status_raw
+
+      - delay: "00:00:10"
+
+      - variables:
+          end_soc_api_s: "{{ states('sensor.r5_last_charge_end_soc_api') }}"
+          end_soc_api: "{{ end_soc_api_s | int(0) if end_soc_api_s not in ['unknown','unavailable','none',''] else 0 }}"
+
+          ba: "{{ (state_attr('sensor.r5_battery_raw','data') or {}).get('attributes', {}) }}"
+          end_soc_fallback: "{{ ba.get('batteryLevel', 0) | int(0) }}"
+
+          soc_end: >-
+            {% if end_soc_api > 0 %}
+              {{ end_soc_api }}
+            {% else %}
+              {{ end_soc_fallback }}
+            {% endif %}
+
+          soc_start: "{{ states('input_number.r5_last_charge_start_soc') | int(0) }}"
+
+          recovered_pct: >-
+            {% set diff = (soc_end | int(0)) - (soc_start | int(0)) %}
+            {{ [diff, 0] | max }}
+
+          dur_api_s: "{{ states('sensor.r5_last_charge_duration_api') }}"
+          duration_min: >-
+            {% if dur_api_s not in ['unknown','unavailable','none',''] and (dur_api_s | int(0)) > 0 %}
+              {{ dur_api_s | int(0) }}
+            {% else %}
+              {% set s = states('input_datetime.r5_last_charge_start') %}
+              {% set e = states('input_datetime.r5_last_charge_end') %}
+              {% set st = as_timestamp(s, 0) %}
+              {% set et = as_timestamp(e, 0) %}
+              {% if st > 0 and et > 0 and et >= st %}
+                {{ ((et - st) / 60) | round(0) }}
+              {% else %}
+                0
+              {% endif %}
+            {% endif %}
+
+          end_status: >-
+            {% set st = states('sensor.r5_charger_status_api') %}
+            {% if st not in ['unknown','unavailable','none',''] %}
+              {{ st }}
+            {% else %}
+              unknown
+            {% endif %}
+
+          start_energy: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) }}"
+          cap_kwh: "{{ states('input_number.r5_battery_capacity_kwh') | float(52) }}"
+          end_energy: "{{ (cap_kwh * (soc_end | float(0)) / 100.0) | float(0) }}"
+
+          recovered_energy: >-
+            {% set diff = (end_energy | float(0)) - (start_energy | float(0)) %}
+            {{ [diff, 0.0] | max }}
+
+          hv_avg_pow: >-
+            {% set mins = duration_min | float(0) %}
+            {% set hours = mins / 60.0 %}
+            {% set energy_avg = ((recovered_energy / hours) if hours > 0 else 0) %}
+            {{ energy_avg | round(1) }}
+
+          charge_type: >-
+            {% set p = hv_avg_pow | float(0) %}
+            {% if p >= 80 %} Rapid DC
+            {% elif p >= 11 %} Fast AC
+            {% elif p > 0 %} Slow AC
+            {% else %} n/a {% endif %}
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_charge_end
+        data:
+          datetime: >-
+            {% set e = states('input_datetime.r5_last_charge_end') %}
+            {% if e in ['unknown','unavailable','none',''] %}
+              {{ now().strftime('%Y-%m-%d %H:%M:%S') }}
+            {% else %}
+              {{ e }}
+            {% endif %}
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_end_soc
+        data:
+          value: "{{ soc_end }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_recovered_pct
+        data:
+          value: "{{ recovered_pct }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_duration_min
+        data:
+          value: "{{ duration_min }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_end_status
+        data:
+          value: "{{ end_status }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_end_energy_kwh
+        data:
+          value: "{{ end_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_recovered_energy_kwh
+        data:
+          value: "{{ recovered_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_average_power_kw
+        data:
+          value: "{{ hv_avg_pow }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_type
+        data:
+          value: "{{ charge_type }}"
+
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.r5_charge_session_active
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 charge END (FAST)"
+          message: >-
+            End {{ now().strftime('%Y-%m-%d %H:%M:%S') }},
+            SoC start={{ soc_start }}%,
+            SoC end={{ soc_end }}%,
+            ΔSoC={{ recovered_pct }}%,
+            duration={{ duration_min }} min,
+            E_start={{ start_energy | round(1) }} kWh,
+            E_end={{ end_energy | round(1) }} kWh,
+            ΔE={{ recovered_energy | round(1) }} kWh,
+            avgP={{ hv_avg_pow }} kW,
+            type={{ charge_type }},
+            status={{ end_status }}
+          notification_id: r5_charge_debug
+
+  r5_capture_end_now_debug:
+    alias: "R5 – Capture END NOW (debug)"
+    mode: restart
+    sequence:
+      - service: persistent_notification.create
+        data:
+          title: "R5 DEBUG"
+          message: "Entered r5_capture_end_now_debug at {{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+          notification_id: r5_charge_debug
+
+      # Refresh session truth before calculating debug values
+      - service: homeassistant.update_entity
+        target:
+          entity_id:
+            - sensor.r5_charges_raw
+            - sensor.r5_battery_raw
+            - sensor.r5_status_raw
+      - delay: "00:00:10"
+
+      - variables:
+          # Prefer Charges RAW end SoC; fallback to status_raw batteryLevel
+          end_soc_api_s: "{{ states('sensor.r5_last_charge_end_soc_api') }}"
+          end_soc_api: "{{ end_soc_api_s | int(0) if end_soc_api_s not in ['unknown','unavailable','none',''] else 0 }}"
+          ra: "{{ (state_attr('sensor.r5_status_raw','data') or {}).get('attributes', {}) }}"
+          soc_end: >-
+            {% if end_soc_api > 0 %}
+              {{ end_soc_api }}
+            {% else %}
+              {{ ra.get('batteryLevel', 0) | int(0) }}
+            {% endif %}
+
+          soc_start: "{{ states('input_number.r5_last_charge_start_soc') | int(0) }}"
+
+          start_raw: "{{ states('input_datetime.r5_last_charge_start') }}"
+          start_ts: "{{ as_timestamp(start_raw, 0) }}"
+
+          duration_min: >-
+            {% set st = start_ts | float(0) %}
+            {% if st > 0 %}
+              {{ ((as_timestamp(now()) - st) / 60) | round(0) }}
+            {% else %}
+              0
+            {% endif %}
+
+          recovered: "{{ [ (soc_end | int(0) - soc_start | int(0)), 0 ] | max }}"
+
+          end_status: >-
+            {% set st = states('sensor.r5_charger_status_api') %}
+            {% if st not in ['unknown','unavailable','none',''] %}
+              {{ st }}
+            {% else %}
+              ended
+            {% endif %}
+
+          cap: "{{ states('input_number.r5_battery_capacity_kwh') | float(52) }}"
+          start_energy: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) }}"
+
+          end_energy_api_s: "{{ states('sensor.r5_available_energy_52_kwh_api') }}"
+          end_energy_api: "{{ end_energy_api_s | float(-1) if end_energy_api_s not in ['unknown','unavailable','none',''] else -1 }}"
+          end_energy_fallback: "{{ (cap * (soc_end | float(0)) / 100.0) | float(0) }}"
+
+          # End energy: prefer API energy; fallback to cap×SoC
+          end_energy: >-
+            {% if end_energy_api >= 0 %}
+              {{ end_energy_api }}
+            {% else %}
+              {{ end_energy_fallback }}
+            {% endif %}
+
+          recovered_energy: >-
+            {% set diff = (end_energy | float(0)) - (start_energy | float(0)) %}
+            {{ [ diff, 0.0 ] | max | round(1) }}
+
+          avg_power_kw: >-
+            {% set dh = (duration_min | float(0)) / 60 %}
+            {% if dh > 0 %}
+              {{ (recovered_energy / dh) | round(1) }}
+            {% else %}
+              0
+            {% endif %}
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 DEBUG"
+          message: >-
+            Mid vars OK:
+            soc_end={{ soc_end }}, soc_start={{ soc_start }},
+            start_raw="{{ start_raw }}", duration_min={{ duration_min }},
+            E_start={{ start_energy }} kWh, E_end={{ end_energy | round(1) }} kWh, dE={{ recovered_energy }} kWh,
+            avgP={{ avg_power_kw }} kW, status="{{ end_status }}"
+          notification_id: r5_charge_debug
+
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.r5_last_charge_end
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_end_soc
+        data:
+          value: "{{ soc_end }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_recovered_pct
+        data:
+          value: "{{ recovered }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_duration_min
+        data:
+          value: "{{ duration_min }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_end_energy_kwh
+        data:
+          value: "{{ end_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_charge_recovered_energy_kwh
+        data:
+          value: "{{ recovered_energy | round(1) }}"
+
+      - service: input_number.set_value
+        target:
+          entity_id: input_number.r5_last_charge_average_power_kw
+        data:
+          value: "{{ avg_power_kw }}"
+
+      - service: input_text.set_value
+        target:
+          entity_id: input_text.r5_last_charge_end_status
+        data:
+          value: "{{ end_status }}"
+
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.r5_charge_session_active
+
+      - service: persistent_notification.create
+        data:
+          title: "R5 DEBUG"
+          message: >-
+            END wrote: soc_end={{ soc_end }}, rec%={{ recovered }}, dur={{ duration_min }}m,
+            E_end={{ end_energy | round(1) }} kWh, dE={{ recovered_energy | round(1) }} kWh,
+            avgP={{ avg_power_kw }} kW, status="{{ end_status }}"
+          notification_id: r5_charge_debug
+          
+  r5_soft_update_now:
+    alias: "R5 Soft Update – run & notify"
+    mode: single
+    sequence:
+      - service: homeassistant.update_entity
+        target:
+          entity_id:
+            - sensor.r5_battery_raw
+            - sensor.r5_status_raw
+            - sensor.r5_soc_levels_raw
+            - sensor.r5_ev_settings_raw
+            - sensor.r5_charges_raw
+            - sensor.r5_hvac_raw
+            - sensor.r5_location_raw
+            - sensor.r5_cockpit_raw
+
+      - service: persistent_notification.create
+        data:
+          title: "Renault Soft Update Triggered"
+          message: >
+            A Soft Update has been requested for all Renault RAW sensors
+            (Battery, Status, SOC, EV Settings, Charges, HVAC, Location, Cockpit).
+            This uses cached data and does not call the Renault API directly.
+          notification_id: "renault_soft_update"
+          
