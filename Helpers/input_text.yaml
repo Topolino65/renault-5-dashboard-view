@@ -1,0 +1,22 @@
+r5_last_charge_type:
+  name: R5 Last Charge Type
+  max: 32
+
+r5_last_charge_end_status:
+  name: R5 Last Charge End Status
+  max: 32
+
+renault_last_payload:
+  name: Renault Last Payload
+  max: 255
+  initial: ""
+  
+# TEST HELPERS
+
+test_last_charge_type:
+  name: Test Last Charge Type
+  max: 32
+  
+test_last_charge_end_status:
+  name: Test Last Charge End Status
+  max: 32

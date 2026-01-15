@@ -1,0 +1,46 @@
+r5_last_charge_start:
+  name: R5 Last Charge Start
+  has_date: true
+  has_time: true
+
+r5_last_charge_end:
+  name: R5 Last Charge End
+  has_date: true
+  has_time: true
+  
+r5_last_nonzero_power_seen:
+  name: R5 Last Nonzero Power Seen
+  has_date: true
+  has_time: true
+  
+r5_last_renault_reauth:
+  name: R5 Last Renault Reauth
+  has_date: true
+  has_time: true
+  
+r5_plug_baseline_ts:
+  name: R5 Plug Baseline Timestamp
+  has_date: true
+  has_time: true
+  
+r5_plug_suspect_since:
+  name: R5 Plug Suspect Since
+  has_date: true
+  has_time: true
+  
+# TEST HELPERS
+
+test_last_charge_start:
+  name: Test Last Charge Start
+  has_date: true
+  has_time: true
+  
+test_last_charge_end:
+  name: Test Last Charge End
+  has_date: true
+  has_time: true
+
+test_last_finished:
+  name: Test Last Finished
+  has_date: true
+  has_time: true

@@ -1,0 +1,6 @@
+r5_charge_session_active:
+  name: R5 Charge Session Active
+  
+r5_plug_suspect_active:
+  name: R5 Plug Suspect Active
+  icon: mdi:alert

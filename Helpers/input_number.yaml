@@ -1,0 +1,141 @@
+r5_last_charge_start_soc:
+  name: R5 Last Charge Start SoC
+  min: 0
+  max: 100
+  step: 1
+
+r5_last_charge_end_soc:
+  name: R5 Last Charge End SoC
+  min: 0
+  max: 100
+  step: 1
+
+r5_last_charge_recovered_pct:
+  name: R5 Last Charge Recovered %
+  min: 0
+  max: 100
+  step: 1
+
+r5_last_charge_duration_min:
+  name: R5 Last Charge Duration (min)
+  min: 0
+  max: 1440       # allow up to 24 hours
+  step: 1
+  mode: box
+  
+r5_last_charge_start_power_kw:
+  name: R5 Last Charge Start (kW)
+  min: 0
+  max: 350
+  step: 0.1
+  mode: box
+  
+r5_battery_capacity_kwh:
+  name: R5 Battery Capacity (kWh)
+  min: 0
+  max: 52
+  step: 0.1
+  unit_of_measurement: kWh
+  initial: 52
+  
+r5_last_charge_average_power_kw:
+  name: R5 Last Charge Average (kW)
+  min: 0
+  max: 350
+  step: 0.1
+  unit_of_measurement: kW
+  mode: box
+  
+r5_charge_start_energy_kwh:
+  name: R5 Charge Start Energy (kWh)
+  min: 0
+  max: 60
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+
+r5_charge_end_energy_kwh:
+  name: R5 Charge End Energy (kWh)
+  min: 0
+  max: 60
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+
+r5_charge_recovered_energy_kwh:
+  name: R5 Charge Recovered (kWh)
+  min: 0
+  max: 60
+  step: 0.1
+  unit_of_measurement: kWh
+  mode: box
+  
+r5_hv_avg_accum_kw:
+  name: R5 HV Avg Accum (kW·samples)
+  min: 0
+  max: 100000
+  step: 0.001
+  
+r5_hv_avg_count:
+  name: R5 HV Avg Count
+  min: 0
+  max: 100000
+  step: 1
+  
+r5_plug_baseline_mileage_km:
+  name: R5 Plug Baseline Mileage (km)
+  min: 0
+  max: 999999
+  step: 1
+  mode: box
+
+r5_plug_baseline_soc:
+  name: R5 Plug Baseline SoC (%)
+  min: 0
+  max: 100
+  step: 1
+  mode: box
+  
+# TEST HELPERS
+
+test_last_charge_start_soc:
+  name: Test Last Charge Start SoC
+  min: 0
+  max: 100
+  step: 1
+  
+test_last_charge_end_soc:
+  name: Test Last Charge End SoC
+  min: 0
+  max: 100
+  step: 1
+  
+test_last_charge_start_power_kw:
+  name: Test Last Charge Start Power (kW)
+  min: 0
+  max: 25
+  step: 0.1
+  
+test_last_charge_average_power_kw:
+  name: Test Last Charge Average Power (kW)
+  min: 0
+  max: 25
+  step: 0.1
+  
+test_charge_start_energy_kwh:
+  name: Test Charge Start Energy (kWh)
+  min: 0
+  max: 100
+  step: 0.1
+  
+test_charge_end_energy_kwh:
+  name: Test Charge End Energy (kWh)
+  min: 0
+  max: 100
+  step: 0.1
+  
+test_charge_energy_stored_kwh:
+  name: Test Charge Energy Stored (kWh)
+  min: 0
+  max: 100
+  step: 0.1
