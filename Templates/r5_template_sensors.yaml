@@ -1,0 +1,2100 @@
+##### Renault 5 Sensors #####
+
+- sensor:
+
+    # ======================
+    # Vehicle Status Section
+    # ======================
+
+    ### (01) ###
+
+    # Battery Level (Battery Raw Cached API Data)
+    - name: "R5 Battery Level (API)"
+      unique_id: r5_battery_level_api
+      device_class: battery
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-battery
+      state: >-
+        {% set root = state_attr('sensor.r5_battery_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set attrs = root.get('attributes', {}) %}
+        {% set attrs = attrs if attrs is mapping else {} %}
+        {% set v = attrs.get('batteryLevel') %}
+        {{ (v | int(0)) if v not in [none, 'unknown', 'unavailable', ''] else 0 }}
+
+    ### (02) ###
+
+    # Available Energy 52kWh (Battery Raw Cached API Data)
+    - name: "R5 Available Energy 52 kWh (API)"
+      unique_id: r5_available_energy_52_api
+      unit_of_measurement: "kWh"
+      state_class: measurement
+      icon: mdi:flash
+      state: >-
+        {% set capacity_kwh = 52 %}
+        {% set data = state_attr('sensor.r5_battery_raw', 'data') or {} %}
+        {% set attrs = data.get('attributes', {}) %}
+        {% set soc = attrs.get('batteryLevel') %}
+        {% if soc in [none, 'unknown', 'unavailable', ''] %}
+          0
+        {% else %}
+          {{ (capacity_kwh * (soc | float(0)) / 100) | round(1) }}
+        {% endif %}
+
+    ### (03) ###
+
+    # Estimated Range (Battery Raw Cached API Data)
+    - name: "R5 Battery Autonomy MI (API)"
+      unique_id: r5_battery_autonomy_api_mi
+      unit_of_measurement: "miles"
+      state_class: measurement
+      icon: mdi:gauge
+      state: >-
+        {% set data = state_attr('sensor.r5_battery_raw', 'data') or {} %}
+        {% set attrs = data.get('attributes', {}) %}
+        {% set v = attrs.get('batteryAutonomy') %}
+        {% if v in [none, 'unknown', 'unavailable', ''] %}
+          0
+        {% else %}
+          {# convert km -> miles, no decimals #}
+          {% set km = v | float(0) %}
+          {{ (km * 0.621371) | round(0) | int }}
+        {% endif %}
+
+    ### (04) ###
+
+    # Vehicle Mileage MI (Cockpit Raw Cached API Data)
+    - name: "R5 Vehicle Mileage MI (API)"
+      unique_id: r5_vehicle_mileage_mi_api
+      unit_of_measurement: "miles"
+      icon: mdi:counter
+      state: >-
+        {% set root = state_attr('sensor.r5_cockpit_raw', 'data') or {} %}
+        {% set attrs = root.get('attributes', {}) %}
+        {% set m = attrs.get('totalMileage') %}
+        {% set km = m | float(0) %}
+        {{ (km * 0.621371) | round(0) | int }}
+
+    ### (05) ###
+    
+    # Charger Plug Status (Battery Raw Cached API Data)
+    - name: "R5 Charger Plug Status (API)"
+      unique_id: r5_charger_plug_status_api
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:ev-plug-type2
+        {% endif %}
+      state: >-
+          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+          {% if test_mode %}
+              Test (Connected)
+          {% else %}
+              {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+              {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
+              {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {% set bd = bd if bd is mapping else {} %}
+              {% set ok = bd.get('ok', false) %}
+              {% set err = (bd.get('error') | string | lower | trim) %}
+              {% set ba = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+              {% set plug = (ba.get('plugStatus', none) | string | trim) %}
+
+              {# CLI prompted / cache mode => do not assert any plug state #}
+              {% if cli_prompted or (not ok) or (err == 'cli_prompted') %}
+                  Unknown (CLI)
+              {% else %}
+                  {# ---- Driving evidence for "Connected but actually unplugged" stuck detection ---- #}
+                  {% set soc_now = ba.get('batteryLevel') %}
+                  {% set soc_now = soc_now if soc_now is number else none %}
+
+                  {% set cd = state_attr('sensor.r5_cockpit_raw', 'data') %}
+                  {% set cd = cd if cd is mapping else {} %}
+                  {% set ca = cd.get('attributes') if cd.get('attributes') is mapping else {} %}
+                  {% set km_now = ca.get('totalMileage') %}
+                  {% set km_now = km_now if km_now is number else none %}
+
+                  {% set km_base = states('input_number.r5_plug_baseline_mileage_km') | float(0) %}
+                  {% set soc_base = states('input_number.r5_plug_baseline_soc') | float(0) %}
+                  {% set base_ts = states('input_datetime.r5_plug_baseline_ts') %}
+                  {% set base_tsv = as_timestamp(base_ts, default=0) %}
+                  {% set base_age = (now().timestamp() - base_tsv) | int(0) %}
+
+                  {% set KM_DELTA = 1 %}
+                  {% set SOC_DROP = 2 %}
+                  {% set MIN_AGE  = 600 %}
+
+                  {# Baseline expiry: prevents old baselines causing (D) for hours/days #}
+                  {% set MAX_AGE  = 12 * 3600 %}
+
+                  {% set drove =
+                      (km_now is not none) and (soc_now is not none) and (base_tsv > 0) and
+                      (base_age >= MIN_AGE) and
+                      (base_age <= MAX_AGE) and
+                      ((km_now - km_base) >= KM_DELTA) and
+                      ((soc_base - soc_now) >= SOC_DROP)
+                  %}
+
+                  {# ---- Charging evidence for "Disconnected but actually plugged" stuck detection ---- #}
+                  {% set ch_state = states('sensor.r5_charger_status_api') | string | trim %}
+
+                  {# Keep evidence strict to avoid small/stuck remaining time values driving decisions #}
+                  {% set charging_evidence = (ch_state == 'In Progress') %}
+
+                  {# Base API meaning #}
+                  {% set map = {'0':'Disconnected','1':'Connected','-1':'Plug Error','-2147483648':'Unknown'} %}
+                  {% set base = map.get(plug, 'Unknown (' ~ plug ~ ')') %}
+
+                  {# Stuck rules:
+                     1) API says Connected but drove evidence suggests unplugged.
+                     2) API says Disconnected but charging evidence suggests plugged.
+                   #}
+                  {% set stuck_connected = (plug == '1' and drove) %}
+                  {% set stuck_disconnected = (plug == '0' and charging_evidence) %}
+                  {% set stuck = stuck_connected or stuck_disconnected %}
+
+                  {% set suffix =
+                      (' (A)' if auth_fail else '') ~
+                      (' (S)' if stale else '') ~
+                      (' (D)' if stuck else '')
+                  %}
+
+                  {{ base ~ suffix }}
+              {% endif %}
+          {% endif %}
+      attributes:
+          test_mode: "{{ is_state('input_boolean.r5_test_mode', 'on') }}"
+          plug_status_code: >-
+              {% if is_state('input_boolean.r5_test_mode', 'on') %}
+                  test
+              {% else %}
+                  {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+                  {% set bd = bd if bd is mapping else {} %}
+                  {% set ba = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+                  {{ (ba.get('plugStatus', none) | string | trim) }}
+              {% endif %}
+          stuck_rule_triggered: >-
+              {% if is_state('input_boolean.r5_test_mode', 'on') %}
+                  none
+              {% else %}
+                  {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+                  {% if cli_prompted %}
+                      none
+                  {% else %}
+                      {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+                      {% set bd = bd if bd is mapping else {} %}
+                       {% set ba = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+                      {% set plug = (ba.get('plugStatus', none) | string | trim) %}
+
+                      {% set soc_now = ba.get('batteryLevel') %}
+                      {% set soc_now = soc_now if soc_now is number else none %}
+
+                      {% set cd = state_attr('sensor.r5_cockpit_raw', 'data') %}
+                      {% set cd = cd if cd is mapping else {} %}
+                      {% set ca = cd.get('attributes') if cd.get('attributes') is mapping else {} %}
+                      {% set km_now = ca.get('totalMileage') %}
+                      {% set km_now = km_now if km_now is number else none %}
+
+                      {% set km_base = states('input_number.r5_plug_baseline_mileage_km') | float(0) %}
+                      {% set soc_base = states('input_number.r5_plug_baseline_soc') | float(0) %}
+                      {% set base_ts = states('input_datetime.r5_plug_baseline_ts') %}
+                      {% set base_tsv = as_timestamp(base_ts, default=0) %}
+                      {% set base_age = (now().timestamp() - base_tsv) | int(0) %}
+
+                      {% set KM_DELTA = 1 %}
+                      {% set SOC_DROP = 2 %}
+                      {% set MIN_AGE  = 600 %}
+                      {% set MAX_AGE  = 12 * 3600 %}
+
+                      {% set drove =
+                          (km_now is not none) and (soc_now is not none) and (base_tsv > 0) and
+                          (base_age >= MIN_AGE) and
+                          (base_age <= MAX_AGE) and
+                          ((km_now - km_base) >= KM_DELTA) and
+                          ((soc_base - soc_now) >= SOC_DROP)
+                      %}
+
+                      {% set ch_state = states('sensor.r5_charger_status_api') | string | trim %}
+                      {% set charging_evidence = (ch_state == 'In Progress') %}
+
+                      {% if plug == '1' and drove %}
+                          connected_but_drove
+                      {% elif plug == '0' and charging_evidence %}
+                          disconnected_but_charging
+                      {% else %}
+                          none
+                      {% endif %}
+                  {% endif %}
+              {% endif %}
+          flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+          flag_raw_stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+          flag_cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+          raw_ok: >-
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {{ (bd.get('ok', false) if bd is mapping else false) }}
+          raw_error: >-
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {{ (bd.get('error') if bd is mapping else none) }}
+              
+    ### (06) ### 
+    
+    # Charger Status (Battery Raw Cached API Data) 
+    - name: "R5 Charger Status (API)"
+      unique_id: r5_charger_status_api
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:ev-station
+        {% endif %}
+      state: >-
+          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+          {% if test_mode %}
+              Test (In Progress)
+          {% else %}
+              {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+              {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
+              {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {% set bd = bd if bd is mapping else {} %}
+              {% set ok = bd.get('ok', false) %}
+              {% set err = (bd.get('error') | string | lower | trim) %}
+              {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+
+              {% if cli_prompted or (not ok) or (err == 'cli_prompted') %}
+                  Unknown (CLI)
+              {% else %}
+                  {% set code = (a.get('chargingStatus', none) | string | trim) %}
+
+                  {% set map = {
+                      '0.0': 'Not Charging',
+                      '0.1': 'On Hold',
+                      '0.2': 'Charge Ended',
+                      '0.3': 'On Hold',
+                      '0.4': 'Flap Open',
+                      '1.0': 'In Progress',
+                      '-1.0': 'Charge Error',
+                      '-1.1': 'Unavailable'
+                  } %}
+
+                  {% set base = map.get(code, 'Unknown (' ~ code ~ ')') %}
+
+                  {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower | trim %}
+                  {% set plug_stuck = plug_state.endswith('(d)') %}
+
+                  {% set suffix =
+                      (' (A)' if auth_fail else '') ~
+                      (' (S)' if stale else '') ~
+                      (' (D)' if plug_stuck else '')
+                  %}
+
+                  {{ base ~ suffix }}
+              {% endif %}
+          {% endif %}
+      attributes:
+          test_mode: "{{ is_state('input_boolean.r5_test_mode', 'on') }}"
+          charging_status_code: >-
+              {% if is_state('input_boolean.r5_test_mode', 'on') %}
+                  test
+              {% else %}
+                  {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+                  {% set bd = bd if bd is mapping else {} %}
+                  {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+                  {{ (a.get('chargingStatus', none) | string | trim) }}
+              {% endif %}
+          flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+          flag_raw_stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+          flag_cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+          raw_ok: >-
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {{ (bd.get('ok', false) if bd is mapping else false) }}
+          raw_error: >-
+              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+              {{ (bd.get('error') if bd is mapping else none) }}
+
+    ### (07) ###
+    
+    # Charging Rate (Numeric)
+    - name: "R5 Charging Rate (kW)"
+      unique_id: r5_charging_rate_kw
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:flash
+        {% endif %}
+      unit_of_measurement: "kW"
+      state_class: measurement
+      state: >-
+        {% set hv = states('<ev-charger-power>') %}
+        {% set hv_kw = (hv | float(0)) if hv not in ['unknown','unavailable','none',''] else 0 %}
+
+        {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+        {% set hv_cnt = states('input_number.r5_hv_avg_count') | int(0) %}
+        {% set public_session = active and (hv_cnt == 0) %}
+
+        {# charging evidence: remaining time OR charger says in progress #}
+        {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+        {% set st = states('sensor.r5_charger_status_api') | string | trim %}
+        {% set charging_evidence = (st == 'In Progress') or (rem > 10) %}
+
+        {# public estimate using elapsed minutes #}
+        {% set start_kwh = states('sensor.r5_last_charge_start_energy_tmp') | float(-1) %}
+        {% set now_kwh = states('sensor.r5_available_energy_52_kwh_api') | float(-1) %}
+
+        {% set s = states('input_datetime.r5_last_charge_start') %}
+        {% set st_ts = as_timestamp(s, 0) %}
+        {% set mins = ((as_timestamp(now()) - st_ts) / 60) if st_ts > 0 else 0 %}
+
+        {% set est_kw = 0 %}
+        {% if start_kwh >= 0 and now_kwh >= 0 and mins > 1 and now_kwh > start_kwh %}
+          {% set dE = now_kwh - start_kwh %}
+          {% set est_kw = (dE / (mins/60)) %}
+        {% endif %}
+
+        {% if hv_kw > 0.2 %}
+          {{ hv_kw | round(1) }}
+        {% elif public_session and charging_evidence and est_kw > 0.2 %}
+          {{ est_kw | round(1) }}
+        {% else %}
+          0
+        {% endif %}
+      attributes:
+        source: >-
+          {% set hv = states('ev-charger-power>') %}
+          {% set hv_kw = (hv | float(0)) if hv not in ['unknown','unavailable','none',''] else 0 %}
+          {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+          {% set hv_cnt = states('input_number.r5_hv_avg_count') | int(0) %}
+          {% set public_session = active and (hv_cnt == 0) %}
+          {{ 'home-charger' if hv_kw > 0.2 else ('public_estimate' if public_session else ('hv_idle' if active else 'idle')) }}
+
+    # Charging Rate (Display)
+    - name: "R5 Charging Rate (Display)"
+      unique_id: r5_charging_rate_display
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:flash
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          {% set p = states('input_number.test_last_charge_start_power_kw') | float(7.2) %}
+          Test ({{ p | round(1) }} kW)
+        {% else %}
+          {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+          {% set hv_cnt = states('input_number.r5_hv_avg_count') | int(0) %}
+          {% set public_session = active and (hv_cnt == 0) %}
+
+          {# charging evidence: remaining time OR charger says in progress #}
+          {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+          {% set st = states('sensor.r5_charger_status_api') | string | trim %}
+          {% set charging_evidence = (st == 'In Progress') or (rem > 10) %}
+
+          {% set v = states('sensor.r5_charging_rate_kw') %}
+          {% set kw = (v | float(0)) if v not in ['unknown','unavailable','none',''] else 0 %}
+
+          {% if public_session and charging_evidence and kw <= 0 %}
+            Public
+          {% elif kw > 0 %}
+            {{ kw | round(1) }} kW
+          {% else %}
+            0 kW
+          {% endif %}
+        {% endif %}
+      attributes:
+        numeric_kw_entity: sensor.r5_charging_rate_kw
+
+    ### (08) ###
+
+    # Charging Remaining Time (Battery Raw Cached API Data)
+    - name: "R5 Charging Remaining Time (API)"
+      unique_id: r5_charging_remaining_time_api
+      icon: mdi:timer
+      unit_of_measurement: min
+      state_class: measurement
+      state: >-
+        {% set d = state_attr('sensor.r5_battery_raw', 'data') %}
+        {% set d = d if d is mapping else {} %}
+        {% set a = d.get('attributes') %}
+        {% set a = a if a is mapping else {} %}
+
+        {% set cur = a.get('chargingRemainingTime', 0) | int(0) %}
+        {% set cs  = (a.get('chargingStatus', none) | string | trim) %}
+        {% set st  = states('sensor.r5_charger_status_api') | string | trim %}
+
+        {# Consider "actively charging" if battery says charging OR charger status says In Progress #}
+        {% set charging_now = (cs == '1.0') or (st == 'In Progress') %}
+
+        {% if not charging_now %}
+          0
+        {% else %}
+          {{ 0 if cur <= 5 else cur }}
+        {% endif %}
+      attributes:
+        raw_minutes: >-
+          {% set d = state_attr('sensor.r5_battery_raw', 'data') %}
+          {% set d = d if d is mapping else {} %}
+          {% set a = d.get('attributes') %}
+          {% set a = a if a is mapping else {} %}
+          {{ a.get('chargingRemainingTime', 0) | int(0) }}
+        charging_status_code: >-
+          {% set d = state_attr('sensor.r5_battery_raw', 'data') %}
+          {% set d = d if d is mapping else {} %}
+          {% set a = d.get('attributes') %}
+          {% set a = a if a is mapping else {} %}
+          {{ (a.get('chargingStatus', none) | string | trim) }}
+        charger_status_used: "{{ states('sensor.r5_charger_status_api') }}"
+              
+    # Charging Remaining Time Display (Battery Raw Cached API Data)              
+    - name: "R5 Charging Remaining Time (Display)"
+      unique_id: r5_charging_remaining_time_display
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:timer
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Test (5 min)
+        {% else %}
+          {% set minutes = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+          {% set hrs = (minutes // 60) | int %}
+          {% set mins = (minutes % 60) | int %}
+          {% set hr_label = 'hr' if hrs == 1 else 'hrs' %}
+          {% set min_label = 'min' if mins == 1 else 'mins' %}
+
+          {% if minutes <= 0 %}
+            Not Charging
+          {% elif minutes < 60 %}
+            {{ mins }} {{ min_label }}
+          {% elif mins == 0 %}
+            {{ hrs }} {{ hr_label }}
+          {% else %}
+            {{ hrs }} {{ hr_label }} {{ mins }} {{ min_label }}
+          {% endif %}
+        {% endif %}
+              
+    ### (09) ###
+    
+    # Charging Flap Status (Derived From Plug & Charger Status)
+    - name: "R5 Charging Flap Status (API)"
+      unique_id: r5_charging_flap_status_api
+      icon: >-
+          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+          {% if test_mode %}
+              mdi:flask-outline
+          {% else %}
+              {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+              {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
+              {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+
+              {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower | trim %}
+              {% set is_stuck = plug_state.endswith('(d)') %}
+              {% set is_connected = plug_state.startswith('connected') %}
+
+              {% set cs_code = (state_attr('sensor.r5_charger_status_api', 'charging_status_code') | string | trim) %}
+
+              {% if cli_prompted %}
+                  mdi:help-circle-outline
+              {% elif is_stuck %}
+                  mdi:help-circle-outline
+              {% elif is_connected or cs_code == '0.4' %}
+                  mdi:lock-open
+              {% else %}
+                  mdi:lock-check
+              {% endif %}
+          {% endif %}
+      state: >-
+          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+          {% if test_mode %}
+              Test (Open)
+          {% else %}
+              {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+              {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
+              {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+
+              {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower | trim %}
+              {% set is_stuck = plug_state.endswith('(d)') %}
+              {% set is_connected = plug_state.startswith('connected') %}
+
+              {% set cs_code = (state_attr('sensor.r5_charger_status_api', 'charging_status_code') | string | trim) %}
+
+              {% set suffix =
+                  (' (A)' if auth_fail else '') ~
+                  (' (S)' if stale else '')
+              %}
+
+              {% if cli_prompted %}
+                  Unknown (CLI)
+              {% elif is_stuck %}
+                  Undetermined{{ suffix }}
+              {% elif is_connected %}
+                  Open: Plugged In{{ suffix }}
+              {% elif cs_code == '0.4' %}
+                  Open: No Plug!{{ suffix }}
+              {% else %}
+                  Closed{{ suffix }}
+              {% endif %}
+          {% endif %}
+      attributes:
+          test_mode: "{{ is_state('input_boolean.r5_test_mode', 'on') }}"
+          flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+          flag_raw_stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+          flag_cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+
+    ### (10) ###
+
+    # HVAC Cabin Temperature (HVAC Raw Cached API Data)
+    - name: "R5 Cabin Temperature (API)"
+      unique_id: r5_cabin_temperature_api
+      device_class: temperature
+      unit_of_measurement: "°C"
+      state_class: measurement
+      icon: >-
+        {% set t = states('sensor.r5_cabin_temperature_api') | float(0) %}
+        {% if t <= 10 %}
+          mdi:snowflake-thermometer
+        {% elif t >= 20 %}
+          mdi:sun-thermometer-outline
+        {% else %}
+          mdi:thermometer
+        {% endif %}
+      state: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('internalTemperature') %}
+        {% if v in [none, '', 'unknown', 'unavailable'] %}
+          unknown
+        {% else %}
+          {{ v | float | round(1) }}
+        {% endif %}
+      availability: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('internalTemperature') %}
+        {{ v not in [none, '', 'unknown', 'unavailable'] }}
+
+    ### (11) ###
+
+    # HVAC Status (HVAC Raw Cached API Data)    
+    - name: "R5 HVAC Status (API)"
+      unique_id: r5_hvac_status_api
+      icon: >-
+        {% if is_state('sensor.r5_hvac_status_api','on') %}
+          mdi:fan
+        {% else %}
+          mdi:fan-off
+        {% endif %}
+      state: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('hvacStatus') %}
+        {% set v = (v | string | lower | trim) %}
+        {{ 'on' if v in ['on','true','1'] else 'off' }}
+
+    ### (12) ####
+
+    # HVAC SOC Threshold (HVAC Raw Cached API Data)   
+    - name: "R5 HVAC SoC Threshold (API)"
+      unique_id: r5_hvac_soc_threshold_api
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:chart-line
+      state: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('socThreshold') %}
+        {{ (v | float(0)) if v not in [none,'unknown','unavailable',''] else 0 }}
+
+    # =====================
+    # Last Activity Section 
+    # =====================
+
+    ### (01) ###
+
+    # HVAC Last Activity (HVAC Raw Cached API Data)
+    - name: "R5 HVAC Last Activity (API)"
+      unique_id: r5_hvac_last_activity_api
+      icon: mdi:fan
+      state: >-
+        {% set d = state_attr('sensor.r5_hvac_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set ts = a.get('lastUpdateTime') %}
+        {% set tsu = as_timestamp(ts, default=none) %}
+        {% if tsu is none %}
+          Unknown
+        {% else %}
+          {% set age = (now().timestamp() - tsu) | int %}
+          {% if age < 0 %}{% set age = 0 %}{% endif %}
+          {% if age >= 7200 %}
+            {{ (age / 3600) | int }} hrs ago
+          {% elif age >= 3600 %}
+            1 hr ago
+          {% elif age >= 120 %}
+            {{ (age / 60) | int }} mins ago
+          {% elif age >= 60 %}
+            1 min ago
+          {% else %}
+            Just Now
+          {% endif %}
+        {% endif %}
+
+    ### (02) ###
+
+    # Battery Last Activity (Battery Raw Cached API Data)
+    - name: "R5 Battery Last Activity (API)"
+      unique_id: r5_battery_last_activity_api
+      icon: mdi:car-battery
+      state: >-
+        {% set d = state_attr('sensor.r5_battery_raw', 'data') %}
+        {% set d = d if d is mapping else {} %}
+        {% set a = d.get('attributes', {}) %}
+        {% set a = a if a is mapping else {} %}
+        {% set ts = a.get('timestamp') %}
+        {% set tsu = as_timestamp(ts, default=none) %}
+        {% if tsu is none %}
+          Unknown
+        {% else %}
+          {% set age = (now().timestamp() - tsu) | int %}
+          {% if age < 0 %}{% set age = 0 %}{% endif %}
+
+          {% if age >= 7200 %}
+            {{ (age / 3600) | int }} hrs ago
+          {% elif age >= 3600 %}
+            1 hr ago
+          {% elif age >= 120 %}
+            {{ (age / 60) | int }} mins ago
+          {% elif age >= 60 %}
+            1 min ago
+          {% else %}
+            Just Now
+          {% endif %}
+        {% endif %}
+
+    ### (03) ###
+
+    # GPS Last Activity (Location Raw Cached API Data)
+    - name: "R5 GPS Last Activity (API)"
+      unique_id: r5_gps_last_activity_api
+      icon: mdi:map-marker
+      state: >-
+        {% set root = state_attr('sensor.r5_location_raw', 'data') or {} %}
+        {% set attrs = root.get('attributes', {}) %}
+        {% set ts = attrs.get('lastUpdateTime')
+                     or attrs.get('locationLastUpdate')
+                     or attrs.get('gpsLastUpdate') %}
+        {% set tsu = as_timestamp(ts, default=none) %}
+        {% if tsu is none %}
+          Unknown
+        {% else %}
+          {% set d = (now().timestamp() - tsu) | int %}
+          {% if d < 0 %}{% set d = 0 %}{% endif %}
+
+          {% if d >= 7200 %}
+            {{ (d/3600) | int }} hrs ago
+          {% elif d >= 3600 %}
+            1 hr ago
+          {% elif d >= 120 %}
+            {{ (d/60) | int }} mins ago
+          {% elif d >= 60 %}
+            1 min ago
+          {% else %}
+            Just Now
+          {% endif %}
+        {% endif %}
+
+    # ================================
+    # Climate/Charging Presets Section 
+    # ================================
+
+    ### (01) ###
+
+    # Preconditioning Temperature (EV Settings Raw Cached API Data)
+    - name: "R5 Preconditioning Temperature (API)"
+      unique_id: r5_preconditioning_temperature_api
+      device_class: temperature
+      unit_of_measurement: "°C"
+      icon: mdi:thermometer
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningTemperature') %}
+        {{ (v | float(0)) if v not in [none,'unknown','unavailable',''] else 0 }}
+
+    ### (02) ###
+
+- binary_sensor:
+
+    - name: "R5 Heated Steering Wheel Selected (EV Settings Raw Cached API Data)"
+      unique_id: r5_heated_wheel_selected_api
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningHeatedStrgWheel') %}
+        {{ iif(v in [true, 'true', 'True', 'on', 1], 'on', 'off') }}
+
+    ### (03) ###
+
+    - name: "R5 Heated Seat Passenger RHD (EV Settings Raw Cached API Data)"
+      unique_id: r5_heated_seat_passenger_rhd_api
+      icon: mdi:car-seat-heater
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningHeatedLeftSeat') %}
+        {{ iif(v in [true, 'true', 'True', 'on', 1], 'on', 'off') }}
+
+    ### (04) ###
+
+    - name: "R5 Heated Seat Driver RHD (EV Settings Raw Cached API Data)"
+      unique_id: r5_heated_seat_driver_rhd_api
+      icon: mdi:car-seat-heater
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningHeatedRightSeat') %}
+        {{ iif(v in [true, 'true', 'True', 'on', 1], 'on', 'off') }}
+
+- sensor:
+
+    ### (05) ###
+
+    # Min SOC Target (SOC Levels Raw Cached API Data)  
+    - name: "R5 SOC Min Target (API)"
+      unique_id: r5_soc_min_target_api
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-battery
+      state: >-
+        {% set d = state_attr('sensor.r5_soc_levels_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('socMin') %}
+        {{ (v | int(0)) if v not in [none,'unknown','unavailable',''] else 0 }}
+
+    ### (06) ###
+
+    # Max SOC target (SOC Levels Raw Cached API Data)
+    - name: "R5 SOC Max Target (API)"
+      unique_id: r5_soc_max_target_api
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-battery
+      state: >-
+        {% set d = state_attr('sensor.r5_soc_levels_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('socTarget') %}
+        {{ (v | int(0)) if v not in [none,'unknown','unavailable',''] else 0 }}
+
+    ### (07) ###
+
+    # Charge Time Start (EV Settings Raw Cached API Data)
+    - name: "R5 Charge Time Start (API)"
+      unique_id: r5_charge_time_start
+      icon: mdi:clock-start
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('chargeTimeStart') %}
+        {{ (v | string) if v not in [none,'unknown','unavailable',''] else 'unknown' }}
+
+    ### (08) ###
+
+    # Charge Time End (EV Settings Raw Cached API Data)
+    - name: "R5 Charge Time End (API)"
+      unique_id: r5_charge_time_end_api
+      icon: mdi:clock-end
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set progs = a.get('programs', []) %}
+        {% set progs = progs if progs is iterable else [] %}
+
+        {# Prefer CHARGE_AND_PRECONDITIONING program if present #}
+        {% set both = progs | selectattr('programType','equalto','CHARGE_AND_PRECONDITIONING') | list %}
+        {% set p = (both[0] if both else (progs[0] if progs else none)) %}
+
+        {% set t = p.get('programDepartureTime') if p is mapping else none %}
+        {{ (t | string) if t not in [none,'unknown','unavailable',''] else 'unknown' }}
+
+    # ===================
+    # Last Charge Section
+    # ===================
+
+    ### (01) ###
+
+    # Last Charge Start Time (Charges Raw Cached API Data)  
+    - name: "R5 Last Charge Start Time (API)"
+      unique_id: r5_last_charge_start_time_api
+      icon: mdi:clock-check-outline
+      state: >-
+        {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set charges = root.get('attributes', {}).get('charges', []) %}
+        {% set charges = charges if charges is iterable else [] %}
+        {% if not charges %}
+          unknown
+        {% else %}
+          {% set last = charges | max(attribute='chargeEndDate') %}
+          {% set ts = last.get('chargeStartDate') if last is mapping else none %}
+          {% if ts in [none,'','unknown','unavailable'] %}
+            unknown
+          {% else %}
+            {% set dt = (ts | as_datetime | as_local) %}
+            {{ dt.strftime('%H:%M') }}
+          {% endif %}
+        {% endif %}
+        
+    # Last Charge Start Time (Display Sensor)           
+    - name: "R5 Last Charge Start (Display)"
+      unique_id: r5_last_charge_start_display
+      icon: mdi:clock-check-outline
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_start_time_api') }}
+        {% endif %}
+
+    ### (02) ###
+
+    # Last Charge End Time (Charges Raw Cached API Data)     
+    - name: "R5 Last Charge End Time (API)"
+      unique_id: r5_last_charge_end_time_api
+      icon: mdi:clock-remove-outline
+      state: >-
+        {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set charges = root.get('attributes', {}).get('charges', []) %}
+        {% set charges = charges if charges is iterable else [] %}
+        {% if not charges %}
+          unknown
+        {% else %}
+          {% set last = charges | max(attribute='chargeEndDate') %}
+          {% set ts = last.get('chargeEndDate') if last is mapping else none %}
+          {% if ts in [none,'','unknown','unavailable'] %}
+            unknown
+          {% else %}
+            {% set dt = (ts | as_datetime | as_local) %}
+            {{ dt.strftime('%H:%M') }}
+          {% endif %}
+        {% endif %}
+        
+    # Last Charge End Time (Display Sensor)           
+    - name: "R5 Last Charge End (Display)"
+      unique_id: r5_last_charge_end_display
+      icon: mdi:clock-remove-outline
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_end_time_api') }}
+        {% endif %}
+
+    ### (03) ###
+    
+    # Last Charge Duration (Charges Raw Cached API Data)
+    - name: "R5 Last Charge Duration (API)"
+      unique_id: r5_last_charge_duration_api
+      icon: mdi:timer
+      unit_of_measurement: "min"
+      state_class: measurement
+      state: >-
+        {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set charges = root.get('attributes', {}).get('charges', []) %}
+        {% set charges = charges if charges is iterable else [] %}
+
+        {% set best = namespace(ts=0, item={}) %}
+        {% for c in charges %}
+          {% if c is mapping %}
+            {% set ed = c.get('chargeEndDate') %}
+            {% set ts = as_timestamp(ed, 0) if ed not in [none,''] else 0 %}
+            {% if ts > best.ts %}
+              {% set best.ts = ts %}
+              {% set best.item = c %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+
+        {% if best.ts <= 0 %}
+          0
+        {% else %}
+          {{ best.item.get('chargeDuration', 0) | int(0) }}
+        {% endif %}
+      attributes:
+        duration_friendly: >-
+          {% set mins = states('sensor.r5_last_charge_duration_api') | int(0) %}
+          {% if mins <= 0 %}
+            unknown
+          {% else %}
+            {% set h = (mins // 60) | int %}
+            {% set m = (mins % 60) | int %}
+            {% if h > 0 and m > 0 %}
+              {{ h }}h {{ m }}m
+            {% elif h > 0 %}
+              {{ h }}h
+            {% else %}
+              {{ m }}m
+            {% endif %}
+          {% endif %}
+        end_date_used: >-
+          {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+          {% set root = root if root is mapping else {} %}
+          {% set charges = root.get('attributes', {}).get('charges', []) %}
+          {% set charges = charges if charges is iterable else [] %}
+          {% set best = namespace(ts=0, ed='') %}
+          {% for c in charges %}
+            {% if c is mapping %}
+              {% set ed = c.get('chargeEndDate') %}
+              {% set ts = as_timestamp(ed, 0) if ed not in [none,''] else 0 %}
+              {% if ts > best.ts %}
+                {% set best.ts = ts %}
+                {% set best.ed = ed | string %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ best.ed if best.ts > 0 else 'unknown' }}
+
+    # Last Charge Duration (Display Sensor)
+    - name: "R5 Last Charge Duration (Display)"
+      unique_id: r5_last_charge_duration_display
+      icon: mdi:timer
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {% set mins = states('sensor.r5_last_charge_duration_api') | int(0) %}
+          {% if mins <= 0 %}
+            unknown
+          {% else %}
+            {% set h = (mins // 60) | int %}
+            {% set m = (mins % 60) | int %}
+            {% if h > 0 and m > 0 %}
+              {{ h }}h {{ m }}m
+            {% elif h > 0 %}
+              {{ h }}h
+            {% else %}
+              {{ m }}m
+            {% endif %}
+          {% endif %}
+        {% endif %}
+
+    #### (04) ###
+
+    # Last Charge Start SOC (Input Helper Value)
+    - name: "R5 Last Charge Start SoC (TMP)"
+      unique_id: r5_last_charge_start_soc_tmp
+      unit_of_measurement: "%"
+      state_class: measurement
+      icon: mdi:car-battery
+      state: "{{ states('input_number.r5_last_charge_start_soc') | int(0) }}"
+
+    #### (05) ###
+
+    # Last Charge End SOC (Charges Raw Cached API Data)
+    - name: "R5 Last Charge End SoC (API)"
+      unique_id: r5_last_charge_end_soc_api
+      icon: mdi:car-battery
+      unit_of_measurement: "%"
+      state: >-
+          {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+          {% set root = root if root is mapping else {} %}
+          {% set attrs = root.get('attributes', {}) %}
+          {% set attrs = attrs if attrs is mapping else {} %}
+          {% set charges = attrs.get('charges', []) %}
+          {% set charges = charges if charges is iterable else [] %}
+
+          {% set best = namespace(ts=0, item={}) %}
+          {% for c in charges %}
+            {% if c is mapping %}
+              {% set ed = c.get('chargeEndDate') %}
+              {% set ts = as_timestamp(ed, 0) if ed not in [none,''] else 0 %}
+              {% if ts > best.ts %}
+                {% set best.ts = ts %}
+                {% set best.item = c %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+
+          {% if best.ts <= 0 %}
+            0
+          {% else %}
+            {{ best.item.get('chargeEndBatteryLevel', 0) | int(0) }}
+          {% endif %}
+      attributes:
+          end_date_used: >-
+              {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+              {% set root = root if root is mapping else {} %}
+              {% set attrs = root.get('attributes', {}) %}
+              {% set attrs = attrs if attrs is mapping else {} %}
+              {% set charges = attrs.get('charges', []) %}
+              {% set charges = charges if charges is iterable else [] %}
+              {% set best = namespace(ts=0, ed='') %}
+              {% for c in charges %}
+                {% if c is mapping %}
+                  {% set ed = c.get('chargeEndDate') %}
+                  {% set ts = as_timestamp(ed, 0) if ed not in [none,''] else 0 %}
+                  {% if ts > best.ts %}
+                    {% set best.ts = ts %}
+                    {% set best.ed = ed | string %}
+                  {% endif %}
+                {% endif %}
+              {% endfor %}
+              {{ best.ed if best.ts > 0 else 'unknown' }}
+          charges_count: >-
+              {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+              {% set root = root if root is mapping else {} %}
+              {% set attrs = root.get('attributes', {}) %}
+              {% set attrs = attrs if attrs is mapping else {} %}
+              {% set charges = attrs.get('charges', []) %}
+              {{ (charges | count) if charges is iterable else 0 }}
+              
+    # Last Charge End SoC (Display Sensor)
+    - name: "R5 Last Charge End SoC (Display)"
+      unique_id: r5_last_charge_end_soc_display
+      icon: mdi:car-battery
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_end_soc_api') | int(0) }}%
+        {% endif %}
+
+    #### (06) ###
+
+    # Last Charge SOC Recovered (Charges Raw Cached API Data) 
+    - name: "R5 Last Charge SoC Recovered (API)"
+      unique_id: r5_last_charge_soc_recovered_api
+      icon: mdi:checkbox-marked-circle-plus-outline
+      unit_of_measurement: "%"
+      state_class: measurement
+      state: >-
+        {% set start = states('input_number.r5_last_charge_start_soc') | int(-1) %}
+        {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set charges = root.get('attributes', {}).get('charges', []) %}
+        {% set charges = charges if charges is iterable else [] %}
+        {% if not charges %}
+          0
+        {% else %}
+          {% set last = charges | max(attribute='chargeEndDate') %}
+          {% set end = (last.get('chargeEndBatteryLevel') if last is mapping else none) | int(-1) %}
+          {% if start < 0 or end < 0 or start > 100 or end > 100 %}
+            0
+          {% else %}
+            {% set delta = end - start %}
+            {{ 0 if delta < 0 else delta }}
+          {% endif %}
+        {% endif %}
+      attributes:
+        start_soc_used: "{{ states('input_number.r5_last_charge_start_soc') }}"
+        end_soc_used: >-
+          {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+          {% set root = root if root is mapping else {} %}
+          {% set charges = root.get('attributes', {}).get('charges', []) %}
+          {% set charges = charges if charges is iterable else [] %}
+          {% if not charges %}
+            unknown
+          {% else %}
+            {% set last = charges | max(attribute='chargeEndDate') %}
+            {{ (last.get('chargeEndBatteryLevel') if last is mapping else none) | int(-1) }}
+          {% endif %}
+          
+    # Last Charge SoC Recovered (Display Sensor)
+    - name: "R5 Last Charge SoC Recovered (Display)"
+      unique_id: r5_last_charge_soc_recovered_display
+      icon: mdi:checkbox-marked-circle-plus-outline
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_soc_recovered_api') | int(0) }}%
+        {% endif %}
+
+    #### (07) ###
+
+    # Last Charge Start Energy (Input Helper Value)
+    - name: "R5 Last Charge Start Energy (TMP)"
+      unique_id: r5_last_charge_start_energy_tmp
+      unit_of_measurement: "kWh"
+      icon: mdi:lightning-bolt
+      availability: >
+        {{ states('input_number.r5_charge_start_energy_kwh') not in ['unknown','unavailable','none',''] }}
+      state: "{{ states('input_number.r5_charge_start_energy_kwh') | float(0) | round(1) }}"
+
+    #### (08) ###
+      
+    # Last Charge End Energy (Input Helper Value)
+    - name: "R5 Last Charge End Energy (TMP)"
+      unique_id: r5_last_charge_end_energy_tmp
+      unit_of_measurement: "kWh"
+      icon: mdi:lightning-bolt
+      availability: >
+        {{ states('input_number.r5_charge_end_energy_kwh') not in ['unknown','unavailable','none',''] }}
+      state: "{{ states('input_number.r5_charge_end_energy_kwh') | float(0) | round(1) }}"
+
+    # Last Charge End Energy (Display Sensor)
+    - name: "R5 Last Charge End Energy (Display)"
+      unique_id: r5_last_charge_end_energy_display
+      icon: mdi:lightning-bolt
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_end_energy_tmp') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    #### (09) ###
+
+    # Last Charge Energy Delta (Input Helper Value)
+    - name: "R5 Last Charge Energy Delta (TMP)"
+      unique_id: r5_last_charge_energy_delta_tmp
+      unit_of_measurement: "kWh"
+      state_class: measurement
+      icon: mdi:checkbox-marked-circle-plus-outline
+      availability: >-
+        {{ states('input_number.r5_charge_recovered_energy_kwh') not in ['unknown','unavailable','none',''] }}
+      state: >-
+        {% set stored = states('input_number.r5_charge_recovered_energy_kwh') | float(-1) %}
+        {% if stored >= 0 %}
+          {{ stored | round(1) }}
+        {% else %}
+          {% set start = states('sensor.r5_last_charge_start_energy_tmp') | float(-1) %}
+          {% set end   = states('sensor.r5_last_charge_end_energy_tmp') | float(-1) %}
+          {% if start < 0 or end < 0 %}
+            0
+          {% else %}
+            {% set delta = end - start %}
+            {{ (0 if delta < 0 else delta) | round(1) }}
+          {% endif %}
+        {% endif %}
+      attributes:
+        start_kwh_used: "{{ states('sensor.r5_last_charge_start_energy_tmp') }}"
+        end_kwh_used: "{{ states('sensor.r5_last_charge_end_energy_tmp') }}"
+        stored_delta_kwh: "{{ states('input_number.r5_charge_recovered_energy_kwh') }}"
+        
+    # Last Charge Energy Delta (Display Sensor)
+    - name: "R5 Last Charge Energy Delta (Display)"
+      unique_id: r5_last_charge_energy_delta_display
+      icon: mdi:checkbox-marked-circle-plus-outline
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_energy_delta_tmp') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    #### (10) ###
+
+    # Last Charge Start Power (Input Helper Value)
+    - name: "R5 Charge Start Power (TMP)"
+      unique_id: r5_last_charge_start_power_tmp
+      unit_of_measurement: "kW"
+      state_class: measurement
+      icon: mdi:flash
+      state: >-
+        {% set p = states('input_number.r5_last_charge_start_power_kw') | float(0) %}
+        {% if p > 0 %}
+          {{ p | round(1) }}
+        {% else %}
+          {{ 'unknown' }}
+        {% endif %}
+        
+     # Last Charge Start Power (Input Helper Value)       
+    - name: "R5 Charge Start Power (Display)"
+      unique_id: r5_charge_start_power_display
+      icon: mdi:flash
+      state: >-
+        {% set p = states('sensor.r5_charge_start_power_tmp') %}
+        {% if p in ['unknown','unavailable','none',''] %}
+          Public
+        {% else %}
+          {% set v = p | float(0) %}
+          {% if v > 0 %}
+            {{ v | round(1) }} kW
+          {% else %}
+            Public
+          {% endif %}
+        {% endif %}
+
+    #### (11) ###
+
+    # Last Charge Average Power (Input Helper Value)
+    - name: "R5 Charge Average Power (TMP)"
+      unique_id: r5_charge_average_power_tmp
+      unit_of_measurement: "kW"
+      state_class: measurement
+      icon: mdi:flash
+      state: >-
+        {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+        {% set stored_avg = states('input_number.r5_last_charge_average_power_kw') | float(0) %}
+
+        {% if not active %}
+          {{ stored_avg | round(1) }}
+        {% else %}
+          {% set acc = states('input_number.r5_hv_avg_accum_kw') | float(0) %}
+          {% set cnt = states('input_number.r5_hv_avg_count') | float(0) %}
+
+          {# Home (Hypervolt) path #}
+          {% if cnt > 0 %}
+            {{ (acc / cnt) | round(1) }}
+          {% else %}
+            {# Public fallback: estimate avg kW = (energy gained so far) / (hours elapsed) #}
+            {% set start_kwh = states('sensor.r5_last_charge_start_energy_tmp') | float(-1) %}
+            {% set now_kwh = states('sensor.r5_available_energy_52_kwh_api') | float(-1) %}
+            
+            {% set s = states('input_datetime.r5_last_charge_start') %}
+            {% set st = as_timestamp(s, 0) %}
+            {% set mins = ((as_timestamp(now()) - st) / 60) if st > 0 else 0 %}
+
+            {% if start_kwh >= 0 and now_kwh >= 0 and mins > 1 and now_kwh > start_kwh %}
+              {% set dE = now_kwh - start_kwh %}
+              {{ (dE / (mins/60)) | round(1) }}
+            {% else %}
+              0
+            {% endif %}
+          {% endif %}
+        {% endif %}
+      attributes:
+        session_active: "{{ is_state('input_boolean.r5_charge_session_active','on') }}"
+        stored_avg_kw: "{{ states('input_number.r5_last_charge_average_power_kw') }}"
+        acc_kw_sum: "{{ states('input_number.r5_hv_avg_accum_kw') }}"
+        sample_count: "{{ states('input_number.r5_hv_avg_count') }}"
+        public_fallback_avg_kw: >-
+          {% set start_kwh = states('sensor.r5_last_charge_start_energy_tmp') | float(-1) %}
+          {% set now_kwh = states('sensor.r5_available_energy_52_kwh_api') | float(-1) %}
+
+          {% set s = states('input_datetime.r5_last_charge_start') %}
+          {% set st = as_timestamp(s, 0) %}
+          {% set mins = ((as_timestamp(now()) - st) / 60) if st > 0 else 0 %}
+
+          {% if start_kwh >= 0 and now_kwh >= 0 and mins > 1 and now_kwh > start_kwh %}
+            {{ ((now_kwh - start_kwh) / (mins/60)) | round(1) }}
+          {% else %}
+            0
+          {% endif %}
+
+    # Last Charge Average Power (Display)
+    - name: "R5 Charge Average Power (Display)"
+      unique_id: r5_charge_average_power_display
+      icon: mdi:flash
+      state: >-
+        {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+        {% set cnt = states('input_number.r5_hv_avg_count') | int(0) %}
+
+        {% set v = states('sensor.r5_charge_average_power_tmp') %}
+        {% set kw = (v | float(0)) if v not in ['unknown','unavailable','none',''] else 0 %}
+
+        {# show Public if it looks like a public session and no avg ever materialized #}
+        {% set stored_avg = states('input_number.r5_last_charge_average_power_kw') | float(0) %}
+        {% set public_like = (cnt == 0) %}
+
+        {% if public_like and ((active and kw <= 0) or ((not active) and stored_avg <= 0)) %}
+          Public
+        {% else %}
+          {{ kw | round(1) }} kW
+        {% endif %}
+      attributes:
+        session_active: "{{ is_state('input_boolean.r5_charge_session_active','on') }}"
+        public_session: >-
+          {% set active = is_state('input_boolean.r5_charge_session_active', 'on') %}
+          {% set cnt = states('input_number.r5_hv_avg_count') | int(0) %}
+          {{ active and (cnt == 0) }}
+        tmp_kw: "{{ states('sensor.r5_charge_average_power_tmp') }}"
+        hv_sample_count: "{{ states('input_number.r5_hv_avg_count') }}"
+        
+    # Last Charge Average Power (Last-Charge Card Display)
+    - name: "R5 Last Charge Average Power (Last Charge Display)"
+      unique_id: r5_last_charge_average_power_last_charge_display
+      icon: mdi:flash
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_charge_average_power_display') }}
+        {% endif %}
+
+    ### (12) ###
+
+    # Last Charge Energy Stored (Charges Raw Cached API Data)
+    - name: "R5 Last Charge Energy Stored (API)"
+      unique_id: r5_last_charge_energy_stored_api
+      icon: mdi:lightning-bolt
+      unit_of_measurement: "kWh"
+      state: >-
+        {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+        {% set root = root if root is mapping else {} %}
+        {% set charges = root.get('attributes', {}).get('charges', []) %}
+        {% set charges = charges if charges is iterable else [] %}
+        {% if not charges %}
+          0
+        {% else %}
+          {% set last = charges | max(attribute='chargeEndDate') %}
+          {% set v = last.get('chargeEnergyRecovered') if last is mapping else none %}
+          {{ (v | float(0)) | round(1) }}
+        {% endif %}
+
+    # Last Charge Energy Stored (Display Sensor)
+    - name: "R5 Last Charge Energy Stored (Display)"
+      unique_id: r5_last_charge_energy_stored_display
+      icon: mdi:lightning-bolt
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {{ states('sensor.r5_last_charge_energy_stored_api') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    ### (13) ###
+    
+    # Last Charge Type (Input Helper Value)
+    - name: "R5 Charge Type (TMP)"
+      unique_id: r5_charge_type_tmp
+      icon: >-
+        {% set s = states('sensor.r5_charge_type_tmp') | string | lower | trim %}
+        {% if s in ['not rated'] %}
+          mdi:alert
+        {% else %}
+          mdi:ev-station
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {% set t = states('input_text.r5_last_charge_type') %}
+          {% if t not in ['','unknown','unavailable','none', None, 'n/a'] %}
+            {{ t }}
+          {% else %}
+            {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+            {% set stored_avg = states('input_number.r5_last_charge_average_power_kw') | float(-1) %}
+            {% set mins = states('input_number.r5_last_charge_duration_min') | float(0) %}
+            {% set dE   = states('input_number.r5_charge_recovered_energy_kwh') | float(0) %}
+
+            {% set avg_calc = ((dE / (mins/60)) if mins > 0 else 0) %}
+            {% set avg_for_type = (avg_calc if test_mode else (stored_avg if stored_avg >= 0 else avg_calc)) %}
+
+            {% if avg_for_type >= 80 %} Rapid DC
+            {% elif avg_for_type >= 40 %} Fast DC
+            {% elif avg_for_type >= 11 %} Fast AC
+            {% elif avg_for_type > 0 %} Slow AC
+            {% else %} Not Rated {% endif %}
+          {% endif %}
+        {% endif %}
+      attributes:
+        stored_type: "{{ states('input_text.r5_last_charge_type') }}"
+        avg_power_used_kw: >-
+          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+          {% set stored_avg = states('input_number.r5_last_charge_average_power_kw') | float(-1) %}
+          {% set mins = states('input_number.r5_last_charge_duration_min') | float(0) %}
+          {% set dE   = states('input_number.r5_charge_recovered_energy_kwh') | float(0) %}
+          {% set avg_calc = ((dE / (mins/60)) if mins > 0 else 0) %}
+          {% set avg_for_type = (avg_calc if test_mode else (stored_avg if stored_avg >= 0 else avg_calc)) %}
+          {{ avg_for_type | round(1) }}
+
+    ### (14) ###
+
+    # Last Charge End Status (Charges Raw Cached API Data)
+    - name: "R5 Charge End Status (TMP)"
+      unique_id: r5_charge_end_status_tmp
+      icon: mdi:check-decagram
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {# 1) Charging now? #}
+          {% set charger_state = states('sensor.r5_charger_status_api') | string | trim %}
+          {% set rem = states('sensor.r5_charging_remaining_time_api') | int(0) %}
+          {% set charging_now = (charger_state == 'In Progress') or (rem > 10) %}
+
+          {# 2) Charges RAW is already the inner object (type/id/attributes/...) #}
+          {% set root = state_attr('sensor.r5_charges_raw','data') %}
+          {% set root = root if root is mapping else {} %}
+          {% set attrs = root.get('attributes', {}) %}
+          {% set attrs = attrs if attrs is mapping else {} %}
+          {% set charges = attrs.get('charges', []) %}
+          {% set charges = charges if charges is not none else [] %}
+
+          {# 3) Find the most recent chargeEndStatus in the list #}
+          {% set end = namespace(val='') %}
+          {% for c in charges %}
+            {% if c is mapping %}
+              {% set v = c.get('chargeEndStatus') %}
+              {% if v is not none %}
+                {% set v = v | string | trim %}
+                {% if v != '' %}
+                  {% set end.val = v %}
+                  {% break %}
+                {% endif %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+
+          {# 4) Output #}
+          {% if charging_now %}
+            In Progress
+          {% else %}
+            {% set sl = end.val | lower %}
+            {% if sl == 'ok' %}
+              Completed
+            {% elif sl in ['ko','fail','failed','error'] %}
+              Failed
+            {% elif end.val != '' %}
+              {{ end.val }}
+            {% else %}
+              N/A
+            {% endif %}
+          {% endif %}
+        {% endif %}
+
+    ### (15) ###
+
+    # Last Charge Date (Charges Raw Cached API Data)
+    - name: "R5 Last Charge Date (API)"
+      unique_id: r5_last_charge_date_api
+      icon: mdi:calendar
+      state: >-
+        {% if is_state('input_boolean.r5_charge_session_active','on') %}
+          Wait...
+        {% else %}
+          {% set root = state_attr('sensor.r5_charges_raw', 'data') %}
+          {% set root = root if root is mapping else {} %}
+          {% set charges = root.get('attributes', {}).get('charges', []) %}
+          {% set charges = charges if charges is iterable else [] %}
+          {% if not charges %}
+            unknown
+          {% else %}
+            {% set last = charges | max(attribute='chargeEndDate') %}
+            {% set ts = last.get('chargeStartDate') if last is mapping else none %}
+            {% if ts in [none,'','unknown','unavailable'] %}
+              unknown
+            {% else %}
+              {% set dt = (ts | as_datetime | as_local) %}
+              {{ dt.strftime('%d/%m/%y') }}
+            {% endif %}
+          {% endif %}
+        {% endif %}
+
+    # =================================
+    # Update Button Secondary Info Text
+    # =================================
+
+    - name: "R5 Soft Update"
+      unique_id: r5_soft_update
+      state: "Click For Info"
+
+    # =====================================
+    # Test Charge Button Secondary Info Text
+    # =====================================
+
+    - name: "R5 Test Charge"
+      unique_id: r5_test_charge
+      state: "Click To Start"
+
+    # =====================
+    # Optional Issue Sensor
+    # =====================
+      
+    - name: "R5 Renault Issue"
+      unique_id: r5_renault_issue
+      icon: mdi:account-alert
+      state: >-
+        {% if is_state('binary_sensor.r5_renault_api_auth_failure','on') %}
+          auth_failure
+        {% elif is_state('binary_sensor.r5_renault_api_cli_prompted','on') %}
+          cli_prompted
+        {% elif is_state('binary_sensor.r5_renault_raw_stale','on') %}
+          raw_stale
+        {% else %}
+          ok
+        {% endif %}
+      attributes:
+        title: >-
+          {% if is_state('binary_sensor.r5_renault_api_auth_failure','on') %}
+            Renault API – Auth Failure
+          {% elif is_state('binary_sensor.r5_renault_api_cli_prompted','on') %}
+            Renault API – CLI Prompted
+          {% elif is_state('binary_sensor.r5_renault_raw_stale','on') %}
+            Renault API – RAW Data Stale
+          {% else %}
+            Renault API – OK
+          {% endif %}
+        message: >-
+          {% if is_state('binary_sensor.r5_renault_api_auth_failure','on') %}
+          **What happened?**  
+          Home Assistant could not authenticate to Renault (token/session issue).
+
+          **What to do:**  
+          • Let automation (8) run (re-login + refresh)  
+          • Check `/config/renault/renault_api_login.log` and `/config/renault_cli.log`
+          {% elif is_state('binary_sensor.r5_renault_api_cli_prompted','on') %}
+          **What happened?**  
+          `renault-api` tried to ask an interactive question (can’t in HA), so the call aborted and scripts fell back to cache.
+
+          **What to do:**  
+          • Let automation (8) run  
+          • Check `/config/renault_cli.log` for “User: Aborted!” / “Please select account”
+          {% elif is_state('binary_sensor.r5_renault_raw_stale','on') %}
+          **What happened?**  
+          One or more RAW sensors are stale (based on `fetched_at`).
+
+          **What to do:**  
+          • Let automation (8) run  
+          • If it persists, check the logs and API reachability
+          {% else %}
+          Everything looks OK right now.
+          {% endif %}
+
+    # ========================================
+    # Use These Sensors For Kilometre Readings
+    # ========================================
+    
+    # Estimated range from Battery Raw KM (cached API data)
+    - name: "R5 Battery Autonomy KM (API)"
+      unique_id: r5_battery_autonomy_api_km
+      unit_of_measurement: "km"
+      state_class: measurement
+      icon: mdi:gauge
+      state: >-
+        {% set data = state_attr('sensor.r5_battery_raw', 'data') or {} %}
+        {% set attrs = data.get('attributes', {}) %}
+        {% set v = attrs.get('batteryAutonomy') %}
+        {% if v in [none, 'unknown', 'unavailable', ''] %}
+          0
+        {% else %}
+          {{ (v | float(0) | round(0) | int) }}
+        {% endif %}
+
+    # Vehicle mileage from Cockpit Raw KM (cached API data)
+    - name: "R5 Vehicle Mileage KM (API)"
+      unique_id: r5_vehicle_mileage_km_api
+      unit_of_measurement: "km"
+      icon: mdi:counter
+      state: >-
+        {% set root = state_attr('sensor.r5_cockpit_raw', 'data') or {} %}
+        {% set attrs = root.get('attributes', {}) %}
+        {% set m = attrs.get('totalMileage') %}
+        {{ (m | float(0)) | round(0) | int }}
+
+    # ===================================
+    # Use This Sensor For A 40kWh Battery
+    # ===================================
+                
+    # Available energy from Battery Raw 40kWh (cached API data)
+    - name: "R5 Available Energy 40 kWh (API)"
+      unique_id: r5_available_energy_40_api
+      unit_of_measurement: "kWh"
+      state_class: measurement
+      icon: mdi:flash
+      state: >-
+        {% set capacity_kwh = 40 %}
+        {% set data = state_attr('sensor.r5_battery_raw', 'data') or {} %}
+        {% set attrs = data.get('attributes', {}) %}
+        {% set soc = attrs.get('batteryLevel') %}
+        {% if soc in [none, 'unknown', 'unavailable', ''] %}
+          0
+        {% else %}
+          {{ (capacity_kwh * (soc | float(0)) / 100) | round(1) }}
+        {% endif %}
+
+- binary_sensor:
+
+    # ===============================
+    # Use These Sensors For A LHD Car
+    # ===============================
+
+    - name: "R5 Heated Seat Driver LHD (API)"
+      unique_id: r5_heated_seat_driver_lhd_api
+      icon: mdi:car-seat-heater
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningHeatedLeftSeat') %}
+        {{ iif(v in [true, 'true', 'True', 'on', 1], 'on', 'off') }}
+
+    - name: "R5 Heated Seat Passenger LHD (API)"
+      unique_id: r5_heated_seat_passenger_lhd_api
+      icon: mdi:car-seat-heater
+      state: >-
+        {% set d = state_attr('sensor.r5_ev_settings_raw', 'data') %}
+        {% set a = d.get('attributes', {}) if d is mapping else {} %}
+        {% set v = a.get('preconditioningHeatedRightSeat') %}
+        {{ iif(v in [true, 'true', 'True', 'on', 1], 'on', 'off') }}
+
+    # ==============================
+    # Auth, CLI Prompt, Stale Alerts
+    # ==============================
+
+    - name: "R5 Renault API Auth Failure"
+      unique_id: r5_renault_api_auth_failure
+      icon: >-
+        {{ 'mdi:account-alert' if is_state('binary_sensor.r5_renault_api_auth_failure','on')
+           else 'mdi:account-check' }}
+      state: >-
+        {% set raws = [
+          'sensor.r5_battery_raw',
+          'sensor.r5_status_raw',
+          'sensor.r5_charges_raw',
+          'sensor.r5_soc_levels_raw',
+          'sensor.r5_ev_settings_raw',
+          'sensor.r5_hvac_raw',
+          'sensor.r5_cockpit_raw',
+          'sensor.r5_location_raw'
+        ] %}
+        {% set authish = ['unauthorized','invalid token','forbidden'] %}
+        {% set ns = namespace(hit=false) %}
+        {% for e in raws %}
+          {% set d = state_attr(e,'data') %}
+          {% set d = d if d is mapping else {} %}
+          {% set err = (d.get('error') | default('', true) | string | lower | trim) %}
+          {% set note = (d.get('note') | default('', true) | string | lower | trim) %}
+          {% set blob = (err ~ ' ' ~ note) | trim %}
+          {% if authish | select('in', blob) | list | length > 0 %}
+            {% set ns.hit = true %}
+          {% endif %}
+        {% endfor %}
+        {{ 'on' if ns.hit else 'off' }}
+      attributes:
+        offenders: >-
+          {% set raws = [
+            'sensor.r5_battery_raw',
+            'sensor.r5_status_raw',
+            'sensor.r5_charges_raw',
+            'sensor.r5_soc_levels_raw',
+            'sensor.r5_ev_settings_raw',
+            'sensor.r5_hvac_raw',
+            'sensor.r5_cockpit_raw',
+            'sensor.r5_location_raw'
+          ] %}
+          {% set authish = ['unauthorized','invalid token','forbidden'] %}
+          {% set out = namespace(list=[]) %}
+          {% for e in raws %}
+            {% set d = state_attr(e,'data') %}
+            {% set d = d if d is mapping else {} %}
+            {% set err = (d.get('error') | default('', true) | string | lower | trim) %}
+            {% set note = (d.get('note') | default('', true) | string | lower | trim) %}
+            {% set blob = (err ~ ' ' ~ note) | trim %}
+            {% if authish | select('in', blob) | list | length > 0 %}
+              {% set out.list = out.list + [ e ~ ' (err=' ~ err ~ ', note=' ~ note ~ ')' ] %}
+            {% endif %}
+          {% endfor %}
+          {{ out.list }}
+
+    - name: "R5 Renault API CLI Prompted"
+      unique_id: r5_renault_api_cli_prompted
+      icon: >-
+        {{ 'mdi:console-network' if is_state('binary_sensor.r5_renault_api_cli_prompted','on')
+           else 'mdi:console' }}
+      state: >-
+        {% set raws = [
+          'sensor.r5_battery_raw',
+          'sensor.r5_status_raw',
+          'sensor.r5_charges_raw',
+          'sensor.r5_soc_levels_raw',
+          'sensor.r5_ev_settings_raw',
+          'sensor.r5_hvac_raw',
+          'sensor.r5_cockpit_raw',
+          'sensor.r5_location_raw'
+        ] %}
+        {% set ns = namespace(hit=false) %}
+        {% for e in raws %}
+          {% set d = state_attr(e, 'data') %}
+          {% set d = d if d is mapping else {} %}
+          {% set err = (d.get('error') | default('', true) | string | lower | trim) %}
+          {% set note = (d.get('note') | default('', true) | string | lower | trim) %}
+          {% if err == 'cli_prompted'
+                or err == 'cli_requested_interactive_input'
+                or err == 'interactive_input_required'
+                or err == 'stale_cache_used_cli_prompt'
+                or 'cli_requested_interactive_input' in note
+                or 'interactive_input_required' in note
+                or 'stale_cache_used_cli_prompt' in note %}
+            {% set ns.hit = true %}
+          {% endif %}
+        {% endfor %}
+        {{ 'on' if ns.hit else 'off' }}
+      attributes:
+        offenders: >-
+          {% set raws = [
+            'sensor.r5_battery_raw',
+            'sensor.r5_status_raw',
+            'sensor.r5_charges_raw',
+            'sensor.r5_soc_levels_raw',
+            'sensor.r5_ev_settings_raw',
+            'sensor.r5_hvac_raw',
+            'sensor.r5_cockpit_raw',
+            'sensor.r5_location_raw'
+          ] %}
+          {% set out = namespace(list=[]) %}
+          {% for e in raws %}
+            {% set d = state_attr(e, 'data') %}
+            {% set d = d if d is mapping else {} %}
+            {% set err = (d.get('error') | default('', true) | string | lower | trim) %}
+            {% set note = (d.get('note') | default('', true) | string | lower | trim) %}
+            {% if err == 'cli_prompted'
+                  or err == 'cli_requested_interactive_input'
+                  or err == 'interactive_input_required'
+                  or err == 'stale_cache_used_cli_prompt'
+                  or 'cli_requested_interactive_input' in note
+                  or 'interactive_input_required' in note
+                  or 'stale_cache_used_cli_prompt' in note %}
+              {% set out.list = out.list + [ e ~ ' (err=' ~ err ~ ', note=' ~ note ~ ')' ] %}
+            {% endif %}
+          {% endfor %}
+          {{ out.list }}
+
+    - name: "R5 Renault RAW Stale"
+      unique_id: r5_renault_raw_stale
+      icon: >-
+        {{ 'mdi:database-alert' if is_state('binary_sensor.r5_renault_raw_stale','on')
+           else 'mdi:database-check' }}
+      state: >-
+        {% set raws = [
+          'sensor.r5_battery_raw',
+          'sensor.r5_status_raw',
+          'sensor.r5_charges_raw',
+          'sensor.r5_soc_levels_raw',
+          'sensor.r5_hvac_raw',
+          'sensor.r5_ev_settings_raw',
+          'sensor.r5_cockpit_raw',
+          'sensor.r5_location_raw'
+        ] %}
+        {% set limit = 6 * 3600 %}
+        {% set ns = namespace(stale=false) %}
+        {% for e in raws %}
+          {% set d = state_attr(e, 'data') %}
+          {% set d = d if d is mapping else {} %}
+          {% set ts = d.get('fetched_at') %}
+          {% set tsv = as_timestamp(ts, default=none) %}
+          {% if tsv is none %}
+            {% set ns.stale = true %}
+          {% else %}
+            {% set age = (now().timestamp() - tsv) | int %}
+            {% if age > limit %}
+              {% set ns.stale = true %}
+            {% endif %}
+          {% endif %}
+        {% endfor %}
+        {{ 'on' if ns.stale else 'off' }}
+      attributes:
+        stale_over_hours: 6
+        offenders: >-
+          {% set raws = [
+            'sensor.r5_battery_raw',
+            'sensor.r5_status_raw',
+            'sensor.r5_charges_raw',
+            'sensor.r5_soc_levels_raw',
+            'sensor.r5_hvac_raw',
+            'sensor.r5_ev_settings_raw',
+            'sensor.r5_cockpit_raw',
+            'sensor.r5_location_raw'
+          ] %}
+          {% set limit = 6 * 3600 %}
+          {% set out = namespace(list=[]) %}
+          {% for e in raws %}
+            {% set d = state_attr(e, 'data') %}
+            {% set d = d if d is mapping else {} %}
+            {% set ts = d.get('fetched_at') %}
+            {% set tsv = as_timestamp(ts, default=none) %}
+            {% if tsv is none %}
+              {% set out.list = out.list + [e ~ ' (no fetched_at)'] %}
+            {% else %}
+              {% set age = (now().timestamp() - tsv) | int %}
+              {% if age > limit %}
+                {% set out.list = out.list + [e ~ ' (' ~ ((age/3600) | round(1)) ~ 'h)'] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {{ out.list }}
+          
+- sensor:
+
+    # =========================
+    # Charge Test Panel Sensors
+    # =========================
+
+    # Row 1: Start Time, End Time, Charge Duration
+    
+    - name: test_last_charge_start_time
+      unique_id: test_last_charge_start_time
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:clock-check-outline
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set s = states('input_datetime.test_last_charge_start') %}
+          {% if s not in ['unknown','unavailable','none',''] %}
+            {{ as_datetime(s).strftime('%H:%M') }}
+          {% else %}
+            --
+          {% endif %}
+        {% endif %}
+
+    - name: test_last_charge_end_time
+      unique_id: test_last_charge_end_time
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:clock-remove-outline
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set s = states('input_datetime.test_last_charge_end') %}
+          {% if s not in ['unknown','unavailable','none',''] %}
+            {{ as_datetime(s).strftime('%H:%M') }}
+          {% else %}
+            --
+          {% endif %}
+        {% endif %}
+
+    - name: test_last_charge_duration
+      unique_id: test_last_charge_duration
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:timer
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set s = as_timestamp(states('input_datetime.test_last_charge_start'), 0) %}
+          {% set e = as_timestamp(states('input_datetime.test_last_charge_end'), 0) %}
+          {% if s > 0 and e > 0 and e >= s %}
+            {{ (((e - s) / 60) | int) }} min
+          {% else %}
+            0 min
+          {% endif %}
+        {% endif %}
+        
+    # Row 2: Start SOC, End SOC, SOC Recovered
+
+    - name: test_last_charge_start_soc
+      unique_id: test_last_charge_start_soc
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:car-battery
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_last_charge_start_soc') | int(0) }}%
+        {% endif %}
+  
+    - name: test_last_charge_end_soc
+      unique_id: test_last_charge_end_soc
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:car-battery
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_last_charge_end_soc') | int(0) }}%
+        {% endif %}
+
+    - name: test_last_charge_soc_recovered
+      unique_id: test_last_charge_soc_recovered
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:checkbox-marked-circle-plus-outline
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set a = states('input_number.test_last_charge_start_soc') | int(0) %}
+          {% set b = states('input_number.test_last_charge_end_soc') | int(0) %}
+          {{ (b - a) }}%
+        {% endif %}
+
+    # Row 3: Start Energy, End Energy, Energy Recovered
+
+    - name: test_last_charge_start_energy
+      unique_id: test_last_charge_start_energy
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:lightning-bolt
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_charge_start_energy_kwh') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    - name: test_last_charge_end_energy
+      unique_id: test_last_charge_end_energy
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:lightning-bolt
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_charge_end_energy_kwh') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    - name: test_last_charge_energy_delta
+      unique_id: test_last_charge_energy_delta
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:checkbox-marked-circle-plus-outline
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set a = states('input_number.test_charge_start_energy_kwh') | float(0) %}
+          {% set b = states('input_number.test_charge_end_energy_kwh') | float(0) %}
+          {{ (b - a) | round(1) }} kWh
+        {% endif %}
+
+    # Row 4: Start Power, Avg. Power, Energy Stored (Uplift)
+    
+    - name: test_charge_start_power
+      unique_id: test_charge_start_power
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:flash
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_last_charge_start_power_kw') | float(0) | round(1) }} kW
+        {% endif %}
+
+    - name: test_charge_average_power
+      unique_id: test_charge_average_power
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:flash
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_last_charge_average_power_kw') | float(0) | round(1) }} kW
+        {% endif %}
+
+    - name: test_last_charge_energy_stored
+      unique_id: test_last_charge_energy_stored
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:lightning-bolt
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {{ states('input_number.test_charge_energy_stored_kwh') | float(0) | round(1) }} kWh
+        {% endif %}
+
+    # Row 5: Charge Type, Test Charge End Status, Charge Date
+    
+    - name: test_charge_type
+      unique_id: test_charge_type
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:ev-station
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set s_ts = as_timestamp(states('input_datetime.test_last_charge_start'), 0) %}
+          {% set e_ts = as_timestamp(states('input_datetime.test_last_charge_end'), 0) %}
+          {% set mins = ((e_ts - s_ts) / 60) if (s_ts > 0 and e_ts > 0 and e_ts >= s_ts) else 0 %}
+          {% set start_e = states('input_number.test_charge_start_energy_kwh') | float(0) %}
+          {% set end_e   = states('input_number.test_charge_end_energy_kwh') | float(0) %}
+          {% set dE = (end_e - start_e) %}
+          {% set avg_calc = (dE / (mins/60)) if mins > 0 else 0 %}
+          {% if avg_calc >= 80 %} Rapid DC
+          {% elif avg_calc >= 40 %} Fast DC
+          {% elif avg_calc >= 11 %} Fast AC
+          {% elif avg_calc > 0 %} Slow AC
+          {% else %} Not Rated {% endif %}
+        {% endif %}
+
+    - name: test_charge_end_status
+      unique_id: test_charge_end_status
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:check-decagram
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set end_val = states('input_text.test_last_charge_end_status') | string | trim %}
+          {% set sl = end_val | lower %}
+          {% if sl == 'ok' or sl in ['complete', 'completed'] %}
+            Completed
+          {% elif sl in ['ko','fail','failed','error'] %}
+            Failed
+          {% elif end_val != '' and end_val not in ['unknown','unavailable','none'] %}
+            {{ end_val }}
+          {% else %}
+            N/A
+          {% endif %}
+        {% endif %}
+
+    - name: test_last_charge_date
+      unique_id: test_last_charge_date
+      icon: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          mdi:flask-outline
+        {% else %}
+          mdi:calendar
+        {% endif %}
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          Wait...
+        {% else %}
+          {% set s = states('input_datetime.test_last_charge_start') %}
+          {% if s not in ['unknown','unavailable','none',''] %}
+            {{ as_datetime(s).strftime('%d/%m/%y') }}
+          {% else %}
+            --
+          {% endif %}
+        {% endif %}

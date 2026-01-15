@@ -1,0 +1,58 @@
+# Updates every second so the UI swap happens immediately at 0 sec
+- trigger:
+    - platform: time_pattern
+      seconds: "/1"
+  binary_sensor:
+    - name: "R5 Test Show Panel"
+      unique_id: r5_test_show_panel
+      state: >-
+        {% set tm = is_state('input_boolean.r5_test_mode','on') %}
+        {% set finished = states('input_datetime.test_last_finished') %}
+        {% set ts = as_timestamp(finished, 0) %}
+        {% set linger = (as_timestamp(now()) - ts) < 60 if ts > 0 else false %}
+        {{ tm or linger }}
+
+# Countdown text shown on your "Auto Reset" button
+- trigger:
+    - platform: time_pattern
+      seconds: "/1"
+  sensor:
+    - name: "R5 Test Panel Hide Countdown"
+      unique_id: r5_test_panel_hide_countdown
+      state: >-
+        {% set ts = as_timestamp(states('input_datetime.test_last_finished'), 0) %}
+        {% if ts > 0 %}
+          {% set rem = 60 - (as_timestamp(now()) - ts) %}
+          {% set rem_i = [rem | int, 0] | max %}
+          {{ rem_i }} sec
+        {% else %}
+          0 sec
+        {% endif %}
+ 
+ # Countdown text shown on your "Test Ends In" button       
+- trigger:
+    - platform: time_pattern
+      seconds: "/1"
+  sensor:
+    - name: "R5 Test Ends Countdown"
+      unique_id: r5_test_ends_countdown
+      state: >-
+        {% if is_state('input_boolean.r5_test_mode','on') %}
+          {% set s = as_timestamp(states('input_datetime.test_last_charge_start'), 0) %}
+          {% if s > 0 %}
+            {% set rem = (s + 300) - as_timestamp(now()) %}
+            {% set rem_i = [rem | int, 0] | max %}
+            {% set m = (rem_i // 60) %}
+            {% set sec = (rem_i % 60) %}
+            {% if m > 0 %}
+              {{ m }} min {{ '%02d' | format(sec) }} sec
+            {% else %}
+              {{ sec }} sec
+            {% endif %}
+          {% else %}
+            5 min 00 sec
+          {% endif %}
+        {% else %}
+          Test Complete
+        {% endif %}
+
