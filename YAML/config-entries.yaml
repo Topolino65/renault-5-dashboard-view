@@ -1,0 +1,22 @@
+lovelace:
+  resources:
+    - url: /local/zen-dots.css
+      type: css
+
+homeassistant:
+  customize:
+    device_tracker.r5_car_location_raw:
+      entity_picture: /local/backgrounds/map-marker-pop-yellow.png
+  packages: !include_dir_named packages
+
+# Additional YAML Files
+script: !include_dir_merge_named scripts
+template: !include_dir_merge_list templates
+mqtt: !include_dir_merge_list mqtt
+shell_command: !include shell_command.yaml
+command_line: !include command_line.yaml
+input_datetime: !include helpers/input_datetime.yaml
+input_number:   !include helpers/input_number.yaml
+input_text:     !include helpers/input_text.yaml
+input_boolean:  !include helpers/input_boolean.yaml
+          

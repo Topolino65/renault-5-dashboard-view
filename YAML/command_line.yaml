@@ -1,0 +1,81 @@
+- sensor:
+    name: "R5 Battery RAW"
+    unique_id: r5_battery_raw
+    command: "/bin/bash /config/scripts/get_r5_battery.sh"
+    command_timeout: 90
+    scan_interval: 300
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 Status Raw"
+    unique_id: r5_status_raw
+    command: "/bin/bash /config/scripts/get_r5_battery.sh"
+    command_timeout: 90
+    scan_interval: 300
+    value_template: >-
+      {% set a = value_json.get('data', {}).get('attributes', {}) %}
+      {{ a.get('timestamp', value_json.get('data', {}).get('fetched_at', now().isoformat())) }}
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 SoC Levels Raw"
+    unique_id: r5_soc_levels_raw
+    command: "/bin/bash /config/scripts/get_r5_soc_levels.sh"
+    command_timeout: 90
+    scan_interval: 900
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 EV Settings Raw"
+    unique_id: r5_ev_settings_raw
+    command: "/bin/bash /config/scripts/get_r5_ev_settings.sh"
+    command_timeout: 90
+    scan_interval: 900
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 Charges Raw"
+    unique_id: r5_charges_raw
+    command: "/bin/bash /config/scripts/get_r5_charges.sh"
+    command_timeout: 90
+    scan_interval: 900
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 HVAC Raw"
+    unique_id: r5_hvac_raw
+    command: "/bin/bash /config/scripts/get_r5_hvac.sh"
+    command_timeout: 90
+    scan_interval: 300
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 Cockpit Raw"
+    unique_id: r5_cockpit_raw
+    command: "/bin/bash /config/scripts/get_r5_cockpit.sh"
+    command_timeout: 90
+    scan_interval: 900
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data
+
+- sensor:
+    name: "R5 Location Raw"
+    unique_id: r5_location_raw
+    command: "/bin/bash /config/scripts/get_r5_location.sh"
+    command_timeout: 90
+    scan_interval: 600
+    value_template: "{{ value_json.data.fetched_at }}"
+    json_attributes:
+      - data

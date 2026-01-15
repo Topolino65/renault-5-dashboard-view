@@ -1,0 +1,446 @@
+
+### Shell Commands ###
+
+    r5_hornlights: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_hornlights_raw.txt"
+        STATUS="/config/renault/hornlights_status.txt"
+
+        {
+            echo "=== $(date) horn-lights ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            # Preflight (VIN-specific): refresh token without interactive prompts
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: renault-api tried to prompt (non-interactive)."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            # Send command (non-interactive + bounded)
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/horn-lights?country=GB"
+            echo "POST $CMD_URL target={{ target }}"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"HornLights\",\"attributes\":{\"action\":\"start\",\"target\":\"{{ target }}\"}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: renault-api prompted (non-interactive)."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- horn-lights output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_charge_action: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_charge_action_raw.txt"
+        STATUS="/config/renault/charge_action_status.txt"
+
+        {
+            echo "=== $(date) charge-action ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/charging-start?country=GB"
+            echo "POST $CMD_URL action={{ action }}"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"ChargingStart\",\"attributes\":{\"action\":\"{{ action }}\"}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_hvac_start_noparam: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_hvac_start_raw.txt"
+        STATUS="/config/renault/hvac_start_status.txt"
+
+        {
+            echo "=== $(date) hvac-start ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/hvac-start?country=GB"
+            echo "POST $CMD_URL action=start"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"HvacStart\",\"attributes\":{\"action\":\"start\"}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_hvac_start: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_hvac_start_raw.txt"
+        STATUS="/config/renault/hvac_start_status.txt"
+
+        {
+            echo "=== $(date) hvac-start temp={{ temperature | int }} ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/hvac-start?country=GB"
+            echo "POST $CMD_URL action=start targetTemperature={{ temperature | int }}"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"HvacStart\",\"attributes\":{\"action\":\"start\",\"targetTemperature\":{{ temperature | int }}}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_hvac_stop: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_hvac_stop_raw.txt"
+        STATUS="/config/renault/hvac_stop_status.txt"
+
+        {
+            echo "=== $(date) hvac-stop ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/hvac-start?country=GB"
+            echo "POST $CMD_URL action=stop"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"HvacStart\",\"attributes\":{\"action\":\"stop\"}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_hvac_stop_legacy: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_hvac_stop_legacy_raw.txt"
+        STATUS="/config/renault/hvac_stop_legacy_status.txt"
+
+        {
+            echo "=== $(date) hvac-stop-legacy ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            PING_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "PING $PING_URL"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$PING_URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "PRECHECK FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            CMD_URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v1/cars/{{ vin }}/actions/hvac-start?country=GB"
+            echo "POST $CMD_URL action=cancel"
+
+            timeout 25s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http post \
+                "$CMD_URL" \
+                "{\"data\":{\"type\":\"HvacStart\",\"attributes\":{\"action\":\"cancel\"}}}" \
+                >> "$RAW" 2>&1 </dev/null || true
+
+            if grep -qiE "please select|select vehicle|interactive_input_required|cli_requested_interactive_input|user:|password:|aborted|could not parse|invalid json" "$RAW"; then
+                echo "POST FAILED: login/interactive required."
+                echo "PROMPTED_LOCALE_OR_LOGIN" > "$STATUS"
+                tail -n 200 "$RAW"
+                echo "=== done (prompted) ==="
+                exit 0
+            fi
+
+            echo "SENT" > "$STATUS"
+            echo "--- output ---"
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_status_refresh: |-
+        /bin/bash -lc '
+        set -euo pipefail
+
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        : "{{ account_id }}"
+        : "{{ vin }}"
+
+        LOG="/config/renault_cli.log"
+        RAW="/config/renault/debug_status_refresh_raw.txt"
+
+        {
+            echo "=== $(date) status-refresh (http ping) ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            "${REN_CLI}" --version || true
+
+            URL="/commerce/v1/accounts/{{ account_id }}/kamereon/kca/car-adapter/v2/cars/{{ vin }}/battery-status?country=GB&brand=RENAULT"
+            echo "GET $URL"
+
+            timeout 30s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
+                "${REN_CLI}" --account "{{ account_id }}" http get "$URL" \
+                > "$RAW" 2>&1 </dev/null || true
+
+            tail -n 200 "$RAW"
+            echo "=== done ==="
+        } >> "$LOG" 2>&1
+        '
+
+    r5_diag: |-
+        /bin/bash -lc '
+        export HOME="/config/renault"
+        export XDG_CONFIG_HOME="/config/renault"
+        export XDG_DATA_HOME="/config/renault"
+
+        if [ -f "/config/renault/.venv/bin/activate" ]; then
+            . "/config/renault/.venv/bin/activate"
+        fi
+
+        REN_CLI="/config/renault/.venv/bin/renault-api"
+
+        {
+            echo "=== diag $(date) ==="
+            echo "HOME=$HOME XDG_CONFIG_HOME=$XDG_CONFIG_HOME XDG_DATA_HOME=$XDG_DATA_HOME"
+            echo "REN_CLI=$REN_CLI"
+            env | sort
+            command -v "${REN_CLI}" || true
+            "${REN_CLI}" --version || true
+            echo "=== end diag ==="
+        } >> /config/renault_cli.log 2>&1
+        '
+
+    r5_api_login: /config/scripts/r5_api_login.sh
+
