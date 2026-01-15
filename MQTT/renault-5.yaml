@@ -1,0 +1,10 @@
+- device_tracker:
+      name: "R5 Car Location (RAW)"
+      unique_id: r5_location_raw_tracker
+      state_topic: "r5/location_raw"
+      json_attributes_topic: "r5/location_raw"
+      source_type: gps
+      value_template: >-
+        {% set lat = value_json.latitude | default(none) %}
+        {% set lon = value_json.longitude | default(none) %}
+        {{ 'home' if (lat is number and lon is number) else 'not_home' }}
