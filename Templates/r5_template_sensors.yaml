@@ -241,7 +241,7 @@
               
     ### (06) ### 
     
-    # Charger Status (Battery Raw Cached API Data) 
+    # Charger Status (Battery Raw Cached API Data)
     - name: "R5 Charger Status (API)"
       unique_id: r5_charger_status_api
       icon: >-
@@ -251,71 +251,115 @@
           mdi:ev-station
         {% endif %}
       state: >-
-          {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
-          {% if test_mode %}
-              Test (In Progress)
+        {% set test_mode = is_state('input_boolean.r5_test_mode', 'on') %}
+        {% if test_mode %}
+          Test (In Progress)
+        {% else %}
+          {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
+          {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
+          {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+
+          {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+          {% set bd = bd if bd is mapping else {} %}
+          {% set ok = bd.get('ok', false) %}
+          {% set err = (bd.get('error') | string | lower | trim) %}
+          {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+
+          {% if cli_prompted or (not ok) or (err == 'cli_prompted') %}
+            Unknown (CLI)
           {% else %}
-              {% set cli_prompted = is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') %}
-              {% set auth_fail = is_state('binary_sensor.r5_renault_api_auth_failure', 'on') %}
-              {% set stale = is_state('binary_sensor.r5_renault_raw_stale', 'on') %}
+            {# RAW codes from API #}
+            {% set code = (a.get('chargingStatus', none) | string | trim) %}
+            {% set plug_code = (a.get('plugStatus', none) | string | trim) %}
 
-              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
-              {% set bd = bd if bd is mapping else {} %}
-              {% set ok = bd.get('ok', false) %}
-              {% set err = (bd.get('error') | string | lower | trim) %}
-              {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+            {# Remaining time from RAW + from sanitised sensor #}
+            {% set raw_rem = a.get('chargingRemainingTime', 0) | int(0) %}
+            {% set rem_state = states('sensor.r5_charging_remaining_time_api') %}
+            {% set san_rem = rem_state | int(0) if rem_state not in ['unknown','unavailable','none',''] else 0 %}
 
-              {% if cli_prompted or (not ok) or (err == 'cli_prompted') %}
-                  Unknown (CLI)
-              {% else %}
-                  {% set code = (a.get('chargingStatus', none) | string | trim) %}
+            {# Your fast evidence sources (rate/power usually flip first) #}
+            {% set rate = states('sensor.r5_charging_rate_display') | float(0) %}
+            {% set hv_power = states('sensor.r5_hypervolt_ev_power') | float(0) %}
+            {% set evidence = (rate > 0.1) or (hv_power > 0.2) %}
 
-                  {% set map = {
-                      '0.0': 'Not Charging',
-                      '0.1': 'On Hold',
-                      '0.2': 'Charge Ended',
-                      '0.3': 'On Hold',
-                      '0.4': 'Flap Open',
-                      '1.0': 'In Progress',
-                      '-1.0': 'Charge Error',
-                      '-1.1': 'Unavailable'
-                  } %}
+            {# Derived plug override marker (your plug sensor uses "... (D)") #}
+            {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower | trim %}
+            {% set plug_stuck = plug_state.endswith('(d)') %}
 
-                  {% set base = map.get(code, 'Unknown (' ~ code ~ ')') %}
+            {# Base map #}
+            {% set map = {
+              '0.0': 'Not Charging',
+              '0.1': 'On Hold',
+              '0.2': 'Charge Ended',
+              '0.3': 'On Hold',
+              '0.4': 'Flap Open',
+              '1.0': 'In Progress',
+              '-1.0': 'Charge Error',
+              '-1.1': 'Unavailable'
+            } %}
 
-                  {% set plug_state = states('sensor.r5_charger_plug_status_api') | lower | trim %}
-                  {% set plug_stuck = plug_state.endswith('(d)') %}
+            {% set base = map.get(code, 'Unknown (' ~ code ~ ')') %}
 
-                  {% set suffix =
-                      (' (A)' if auth_fail else '') ~
-                      (' (S)' if stale else '') ~
-                      (' (D)' if plug_stuck else '')
-                  %}
+            {# Override #1: evidence says charging RIGHT NOW (covers API lag) #}
+            {% set override_in_progress_evidence = (plug_code == '1') and evidence %}
 
-                  {{ base ~ suffix }}
-              {% endif %}
+            {# Override #2: credible remaining time also implies charging #}
+            {% set override_in_progress_remaining = (plug_code == '1') and ((raw_rem > 10) or (san_rem > 10)) %}
+
+            {% if override_in_progress_evidence or override_in_progress_remaining %}
+              {% set base = 'In Progress' %}
+            {% endif %}
+
+            {# Suffixes #}
+            {% set suffix =
+              (' (A)' if auth_fail else '') ~
+              (' (S)' if stale else '') ~
+              (' (D)' if plug_stuck else '') ~
+              (' (E)' if override_in_progress_evidence and (base == 'In Progress') and (code != '1.0') else '')
+            %}
+
+            {{ base ~ suffix }}
           {% endif %}
+        {% endif %}
       attributes:
-          test_mode: "{{ is_state('input_boolean.r5_test_mode', 'on') }}"
-          charging_status_code: >-
-              {% if is_state('input_boolean.r5_test_mode', 'on') %}
-                  test
-              {% else %}
-                  {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
-                  {% set bd = bd if bd is mapping else {} %}
-                  {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
-                  {{ (a.get('chargingStatus', none) | string | trim) }}
-              {% endif %}
-          flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
-          flag_raw_stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
-          flag_cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
-          raw_ok: >-
-              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
-              {{ (bd.get('ok', false) if bd is mapping else false) }}
-          raw_error: >-
-              {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
-              {{ (bd.get('error') if bd is mapping else none) }}
-
+        test_mode: "{{ is_state('input_boolean.r5_test_mode', 'on') }}"
+        charging_status_code: >-
+          {% if is_state('input_boolean.r5_test_mode', 'on') %}
+            test
+          {% else %}
+            {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+            {% set bd = bd if bd is mapping else {} %}
+            {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+            {{ (a.get('chargingStatus', none) | string | trim) }}
+          {% endif %}
+        plug_status_code: >-
+          {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+          {% set bd = bd if bd is mapping else {} %}
+          {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+          {{ (a.get('plugStatus', none) | string | trim) }}
+        remaining_time_raw: >-
+          {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+          {% set bd = bd if bd is mapping else {} %}
+          {% set a = bd.get('attributes') if bd.get('attributes') is mapping else {} %}
+          {{ a.get('chargingRemainingTime', 0) | int(0) }}
+        remaining_time_sanitised: "{{ states('sensor.r5_charging_remaining_time_api') }}"
+        evidence_rate_kw: "{{ states('sensor.r5_charging_rate_display') }}"
+        evidence_hypervolt_power_kw: "{{ states('sensor.r5_hypervolt_ev_power') }}"
+        evidence_active: >-
+          {% set rate = states('sensor.r5_charging_rate_display') | float(0) %}
+          {% set hv_power = states('sensor.r5_hypervolt_ev_power') | float(0) %}
+          {{ (rate > 0.1) or (hv_power > 0.2) }}
+        plug_state_interpreted: "{{ states('sensor.r5_charger_plug_status_api') }}"
+        flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
+        flag_raw_stale: "{{ is_state('binary_sensor.r5_renault_raw_stale', 'on') }}"
+        flag_cli_prompted: "{{ is_state('binary_sensor.r5_renault_api_cli_prompted', 'on') }}"
+        raw_ok: >-
+          {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+          {{ (bd.get('ok', false) if bd is mapping else false) }}
+        raw_error: >-
+          {% set bd = state_attr('sensor.r5_battery_raw', 'data') %}
+          {{ (bd.get('error') if bd is mapping else none) }}
+          
     ### (07) ###
     
     # Charging Rate (Numeric)
@@ -2098,3 +2142,4 @@
             --
           {% endif %}
         {% endif %}
+
