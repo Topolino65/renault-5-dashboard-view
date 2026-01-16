@@ -279,7 +279,7 @@
 
             {# Your fast evidence sources (rate/power usually flip first) #}
             {% set rate = states('sensor.r5_charging_rate_display') | float(0) %}
-            {% set hv_power = states('sensor.r5_hypervolt_ev_power') | float(0) %}
+            {% set hv_power = states('<ev-charger-power>') | float(0) %}
             {% set evidence = (rate > 0.1) or (hv_power > 0.2) %}
 
             {# Derived plug override marker (your plug sensor uses "... (D)") #}
@@ -344,10 +344,10 @@
           {{ a.get('chargingRemainingTime', 0) | int(0) }}
         remaining_time_sanitised: "{{ states('sensor.r5_charging_remaining_time_api') }}"
         evidence_rate_kw: "{{ states('sensor.r5_charging_rate_display') }}"
-        evidence_hypervolt_power_kw: "{{ states('sensor.r5_hypervolt_ev_power') }}"
+        evidence_home_charger_power_kw: "{{ states('<ev-charger-power>') }}"
         evidence_active: >-
           {% set rate = states('sensor.r5_charging_rate_display') | float(0) %}
-          {% set hv_power = states('sensor.r5_hypervolt_ev_power') | float(0) %}
+          {% set hv_power = states('<ev-charger-power>') | float(0) %}
           {{ (rate > 0.1) or (hv_power > 0.2) }}
         plug_state_interpreted: "{{ states('sensor.r5_charger_plug_status_api') }}"
         flag_auth_failure: "{{ is_state('binary_sensor.r5_renault_api_auth_failure', 'on') }}"
@@ -2142,4 +2142,5 @@
             --
           {% endif %}
         {% endif %}
+
 
