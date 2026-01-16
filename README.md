@@ -1,4 +1,6 @@
-This ZIP file contains all the necessary files/folders for you to install the custom Renault card into your instance of HA. Please read through the comprehensive installation guide carefully, as it detials all the steps you need to undertake, to get the card working properly. Note that there are a number of pre-requisties. You wilk need to have installed the following features before the card will function correctly.
+This ZIP file contains all the necessary files/folders you need to install the custom Renault5 card into your instance of Home Assistant. Please read through the comprehensive installation guide carefully, as it details all the steps you need to undertake, to get the card working properly. Note that there are a number of pre-requisties. 
+
+You will need to have installed the following features before the card will function as intended.
 
 01.	 HACS
 02.	 File Editor (Add-on)
