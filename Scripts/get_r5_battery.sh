@@ -10,7 +10,8 @@ if [ -f "/config/renault/.venv/bin/activate" ]; then
     . "/config/renault/.venv/bin/activate"
 fi
 
-REN_CLI="/config/renault/.venv/bin/renault-api"
+# Use venv Python directly (more robust than the renault-api wrapper script)
+REN_PY="/config/renault/.venv/bin/python"
 
 KAM_ACCOUNT_ID="<your-account-number>"
 VIN="<your-vin-number>"
@@ -43,7 +44,7 @@ URL="/commerce/v1/accounts/${KAM_ACCOUNT_ID}/kamereon/kca/car-adapter/v2/cars/${
 # bounded call; do not hang; do not prompt
 RC=0
 timeout 45s env HOME="$HOME" XDG_CONFIG_HOME="$XDG_CONFIG_HOME" XDG_DATA_HOME="$XDG_DATA_HOME" \
-    "${REN_CLI}" --account "${KAM_ACCOUNT_ID}" http get "${URL}" \
+    "${REN_PY}" -m renault_api.cli --account "${KAM_ACCOUNT_ID}" http get "${URL}" \
     > "${RAW_OUT}" 2>&1 </dev/null || RC=$?
 export R5_REN_RC="$RC"
 
