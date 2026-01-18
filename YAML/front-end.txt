@@ -25,6 +25,264 @@ sections:
             box-shadow: none !important;
             border: none !important;
             }
+        visibility:
+          - condition: state
+            entity: input_boolean.r5_charge_session_active
+            state: 'off'
+      - type: custom:button-card
+        entity: sensor.r5_battery_level_api
+        visibility:
+          - condition: state
+            entity: input_boolean.r5_charge_session_active
+            state: 'on'
+        tap_action: none
+        double_tap_action: none
+        hold_action: none
+        triggers_update:
+          - sensor.r5_battery_level_api
+          - sensor.r5_soc_max_target_api
+        show_name: false
+        show_state: true
+        show_icon: false
+        aspect_ratio: 2/1
+        custom_fields:
+          car: |
+            <img src="/local/backgrounds/charge-indicator.png"
+                 style="width:100%;height:100%;object-fit:contain;display:block;">
+          overlay: |
+            <div></div>
+          line: |
+            <div></div>
+          min_badge: |
+            [[[
+              const s = states['sensor.r5_soc_min_target_api']?.state;
+              const v = (s === undefined || s === null || s === 'unknown' || s === 'unavailable')
+                ? '—'
+                : String(s).replace('%','');
+              return `
+                <div class="minwrap">
+                  <div class="minsmall">Min SOC</div>
+                  <div class="minbig">${v}%</div>
+                  <div class="tri"></div>
+                </div>`;
+            ]]]
+          min_dash: |
+            <div></div>
+          max_badge: |
+            [[[
+              const s = states['sensor.r5_soc_max_target_api']?.state;
+              const v = (s === undefined || s === null || s === 'unknown' || s === 'unavailable')
+                ? '—'
+                : String(s).replace('%','');
+              return `
+                <div class="maxwrap">
+                  <div class="maxsmall">Target SOC</div>
+                  <div class="maxbig">${v}%</div>
+                  <div class="tri"></div>
+                </div>`;
+            ]]]
+          max_dash: |
+            <div></div>
+          current_badge: |
+            [[[
+              const raw = String(entity.state ?? '');
+              const cur = (raw === 'unknown' || raw === 'unavailable' || raw === '') ? '—' : raw.replace('%','');
+              return `
+                <div class="curwrap">
+                  <div class="cursmall">Current SOC</div>
+                  <div class="curbig">${cur}%</div>
+                </div>`;
+            ]]]
+        styles:
+          card:
+            - padding: 0
+            - border-radius: 16px
+            - overflow: hidden
+            - position: relative
+          custom_fields:
+            car:
+              - position: absolute
+              - inset: 0
+              - z-index: 2
+            overlay:
+              - position: absolute
+              - inset: 0
+              - z-index: 3
+              - background: rgba(51, 190, 250, 0.50)
+              - transition: clip-path 350ms ease
+              - '-webkit-mask-image': url("/local/backgrounds/charge-indicator.png")
+              - '-webkit-mask-repeat': no-repeat
+              - '-webkit-mask-position': center
+              - '-webkit-mask-size': contain
+              - mask-image: url("/local/backgrounds/charge-indicator.png")
+              - mask-repeat: no-repeat
+              - mask-position: center
+              - mask-size: contain
+              - clip-path: |
+                  [[[
+                    const cur = Math.max(0, Math.min(100, parseFloat(String(entity.state).replace('%','')) || 0));
+                    return `inset(0 ${100 - cur}% 0 0)`;
+                  ]]]
+            line:
+              - position: absolute
+              - top: 23%
+              - bottom: 4%
+              - width: 2px
+              - background-color: '#335ffa'
+              - box-shadow: 0 0 8px rgba(51, 190, 250, 0.50)
+              - z-index: 10
+              - transition: left 350ms ease
+              - left: |
+                  [[[
+                    const cur = Math.max(0, Math.min(100, parseFloat(String(entity.state).replace('%','')) || 0));
+                    return `calc(${cur}% - 1px)`;
+                  ]]]
+            min_badge:
+              - position: absolute
+              - top: '-3%'
+              - z-index: 15
+              - color: rgba(255,255,255,0.9)
+              - text-align: center
+              - pointer-events: none
+              - transition: left 350ms ease
+              - left: |
+                  [[[
+                    const s = states['sensor.r5_soc_min_target_api']?.state;
+                    const max = Math.max(0, Math.min(100, parseFloat(String(s).replace('%','')) || 0));
+                    return `${max}%`;
+                  ]]]
+              - transform: translateX(-50%)
+            min_dash:
+              - position: absolute
+              - top: 23%
+              - height: 22%
+              - width: 0
+              - border-left: 2px dashed rgba(255,255,255,0.35)
+              - z-index: 14
+              - pointer-events: none
+              - transition: left 350ms ease
+              - left: |
+                  [[[
+                    const s = states['sensor.r5_soc_min_target_api']?.state;
+                    const max = Math.max(0, Math.min(100, parseFloat(String(s).replace('%','')) || 0));
+                    return `${max}%`;
+                  ]]]
+              - transform: translateX(-50%)
+            max_badge:
+              - position: absolute
+              - top: '-3%'
+              - z-index: 15
+              - color: rgba(255,255,255,0.9)
+              - text-align: center
+              - pointer-events: none
+              - transition: left 350ms ease
+              - left: |
+                  [[[
+                    const s = states['sensor.r5_soc_max_target_api']?.state;
+                    const max = Math.max(0, Math.min(100, parseFloat(String(s).replace('%','')) || 0));
+                    return `${max}%`;
+                  ]]]
+              - transform: translateX(-50%)
+            max_dash:
+              - position: absolute
+              - top: 23%
+              - height: 22%
+              - width: 0
+              - border-left: 2px dashed rgba(255,255,255,0.35)
+              - z-index: 14
+              - pointer-events: none
+              - transition: left 350ms ease
+              - left: |
+                  [[[
+                    const s = states['sensor.r5_soc_max_target_api']?.state;
+                    const max = Math.max(0, Math.min(100, parseFloat(String(s).replace('%','')) || 0));
+                    return `${max}%`;
+                  ]]]
+              - transform: translateX(-50%)
+            current_badge:
+              - position: absolute
+              - left: 50%
+              - bottom: 34%
+              - transform: translateX(-50%)
+              - z-index: 30
+              - pointer-events: none
+        card_mod:
+          style: |
+            ha-card {
+              background: none !important;
+              box-shadow: none !important;
+              border: none !important;
+            }
+            .minwrap{
+              display: inline-flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 2px;
+              line-height: 1.05;
+              text-shadow: 0 0 6px rgba(0,0,0,0.55);
+            }
+            .minsmall{
+              font-size: 11px;
+              opacity: 0.85;
+              letter-spacing: 0.2px;
+            }
+            .minbig{
+              font-size: 18px; /* change this for Target SOC value size */
+              font-weight: 700;
+              color: orange;
+            }
+            .maxwrap{
+              display: inline-flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 2px;
+              line-height: 1.05;
+              text-shadow: 0 0 6px rgba(0,0,0,0.55);
+            }
+            .maxsmall{
+              font-size: 11px;
+              opacity: 0.85;
+              letter-spacing: 0.2px;
+            }
+           .maxbig{
+              font-size: 18px; /* change this for Target SOC value size */
+              font-weight: 700;
+              color: orange;
+            }
+            .tri{
+              width: 0;
+              height: 0;
+              margin-top: 4px;
+              border-left: 6px solid transparent;
+              border-right: 6px solid transparent;
+              border-top: 8px solid rgba(255,255,255,0.35);
+            }
+             /* Current SOC badge: transparent + keep capitalization */
+            .curwrap{
+              display: inline-flex;
+              flex-direction: column;
+              align-items: center;
+              gap: 2px;
+              padding: 0;                 /* transparent (no pill) */
+              border-radius: 0;
+              background: transparent;
+              backdrop-filter: none;
+              -webkit-backdrop-filter: none;
+              color: rgba(255,255,255,0.92);
+              line-height: 1.05;
+              text-shadow: 0 0 6px rgba(0,0,0,0.55);
+            }
+            .cursmall{
+              font-size: 11px;
+              opacity: 0.85;
+              letter-spacing: 0.2px;
+              text-transform: none;       /* <-- stops forced lowercase */
+            }
+            .curbig{
+              font-size: 18px; /* change this for Current SOC value size */
+              font-weight: 700;
+              color: orange
+            }
       - type: vertical-stack
         cards:
           - type: markdown
@@ -4461,4 +4719,5 @@ sections:
                         50% { transform: scale(1.08); opacity: 0.85; }
                         100% { transform: scale(1); opacity: 1; }
                         }
+
 
