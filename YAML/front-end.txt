@@ -1248,7 +1248,7 @@ sections:
                     border: none !important;
                   }
           - type: custom:mushroom-entity-card
-            entity: sensor.r5_gps_activity_api
+            entity: sensor.r5_gps_last_activity_api
             icon: mdi:map-marker
             name: GPS
             card_mod:
@@ -4719,5 +4719,6 @@ sections:
                         50% { transform: scale(1.08); opacity: 0.85; }
                         100% { transform: scale(1); opacity: 1; }
                         }
+
 
 
