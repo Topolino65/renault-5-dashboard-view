@@ -2229,7 +2229,7 @@ sections:
                         border: none !important;
                       }
               - type: custom:mushroom-entity-card
-                entity: sensor.r5_last_charge_start_soc_template
+                entity: sensor.r5_last_charge_start_soc_tmp
                 name: Start
                 icon: mdi:car-battery
                 card_mod:
@@ -4719,6 +4719,7 @@ sections:
                         50% { transform: scale(1.08); opacity: 0.85; }
                         100% { transform: scale(1); opacity: 1; }
                         }
+
 
 
 
