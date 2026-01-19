@@ -2,13 +2,14 @@ This ZIP file contains all the necessary files/folders you need to install the c
 
 You will need to have installed the following features before the card will function as intended.
 
-01.	 HACS
-02.	 File Editor (Add-on)
-03.	 Google Map Card by KATA7 (via HACS)
-04.	 Mushroom Cards (via HACS)
-05.	 Button Cards (via HACS)
-06.	 Your own EV Home Charger’s HA integration
-07.	 Advanced SSH & Web Terminal (Add-on)
-08.	 Mosquitto MQTT broker (Add-on)
+1.	 HACS
+2.	 File Editor (Add-on)
+3.	 Browser Mod
+4.	 Google Map Card by KATA7 (via HACS)
+5.	 Mushroom Cards (via HACS)
+6.	 Button Cards (via HACS)
+7.	 Your own EV Home Charger’s HA integration
+8.	 Advanced SSH & Web Terminal (Add-on)
+9.	 Mosquitto MQTT broker (Add-on)
 
 If you spot any errors, please raise an issue. If there are any other features you would like to see incorporated in a future release, then raise a request
