@@ -480,7 +480,7 @@
                           }
                   - type: custom:mushroom-entity-card
                     entity: sensor.r5_vehicle_mileage_mi_api
-                    name: Mileage
+                    name: Odometer
                     card_mod:
                       style:
                         mushroom-shape-icon$: |
@@ -4747,3 +4747,4 @@
                             50% { transform: scale(1.08); opacity: 0.85; }
                             100% { transform: scale(1); opacity: 1; }
                             }
+
