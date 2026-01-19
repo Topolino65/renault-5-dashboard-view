@@ -1360,7 +1360,7 @@
                   color: yellow !important;
                 }
           - type: custom:google-map-card
-            api_key: AIzaSyDoHJ7700islKamJcZ74UwunvdmJcS5T9Y
+            api_key: <your-google-maps-api-key>
             cameraControl: false
             zoomControl: false
             streetViewControl: false
@@ -4799,5 +4799,6 @@
                             50% { transform: scale(1.08); opacity: 0.85; }
                             100% { transform: scale(1); opacity: 1; }
                             }
+
 
 
